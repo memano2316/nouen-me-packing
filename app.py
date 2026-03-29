@@ -889,7 +889,24 @@ def generate():
             download_name=filename,
         )
     except Exception as e:
-        return f'<p style="color:red;font-family:sans-serif;padding:20px;">エラー: {e}</p>', 500
+        import traceback
+        tb = traceback.format_exc()
+        return f'<pre style="color:red;padding:20px;">エラー: {e}\n\n{tb}</pre>', 500
+    except BaseException as e:
+        import traceback
+        tb = traceback.format_exc()
+        return f'<pre style="color:red;padding:20px;">致命的エラー: {e}\n\n{tb}</pre>', 500
+
+
+@app.route('/debug')
+def debug():
+    import traceback
+    try:
+        token = get_valid_token()
+        slips = fetch_delivery_slips('2026-03-30', '2026-03-30')
+        return f'<pre>token OK\nslips: {len(slips)} 件</pre>'
+    except Exception as e:
+        return f'<pre style="color:red;">{e}\n{traceback.format_exc()}</pre>', 500
 
 
 if __name__ == '__main__':
