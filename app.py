@@ -380,7 +380,7 @@ def get_valid_token() -> str:
     r = requests.get(
         f'{API_BASE}/delivery_slips?per_page=1&page=1',
         headers={'Authorization': f'Bearer {access_token}'},
-        timeout=30,
+        timeout=10,
     )
     if r.status_code == 200:
         return access_token
@@ -392,7 +392,7 @@ def get_valid_token() -> str:
             'refresh_token': refresh_tok,
             'client_id':     CLIENT_ID,
             'client_secret': CLIENT_SECRET,
-        }, timeout=30)
+        }, timeout=10)
         if resp.status_code == 200:
             new_data = resp.json()
             # ローカルならファイルも更新
@@ -417,7 +417,7 @@ def fetch_delivery_slips(start_date: str, end_date: str) -> list:
         url = (f'{API_BASE}/delivery_slips'
                f'?issue_date_from={start_date}&issue_date_to={end_date}'
                f'&per_page={per_page}&page={page}')
-        r = requests.get(url, headers=headers, timeout=30)
+        r = requests.get(url, headers=headers, timeout=10)
         if r.status_code != 200:
             raise Exception(f'Misoca API エラー: HTTP {r.status_code}')
         data = r.json()
