@@ -27,6 +27,9 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
 
 app = Flask(__name__)
 
+# Misoca API との通信に使うセッション（TCP/TLS 接続を再利用して高速化）
+misoca_session = requests.Session()
+
 # ============================================================
 # 設定
 # ============================================================
@@ -377,7 +380,7 @@ def get_valid_token() -> str:
         raise Exception('MISOCA_ACCESS_TOKEN が設定されていません。Railway の環境変数を確認してください。')
 
     # 試し打ち
-    r = requests.get(
+    r = misoca_session.get(
         f'{API_BASE}/delivery_slips?per_page=1&page=1',
         headers={'Authorization': f'Bearer {access_token}'},
         timeout=10,
@@ -387,7 +390,7 @@ def get_valid_token() -> str:
 
     # 401 → リフレッシュ試行
     if r.status_code == 401 and refresh_tok:
-        resp = requests.post(TOKEN_URL, data={
+        resp = misoca_session.post(TOKEN_URL, data={
             'grant_type':    'refresh_token',
             'refresh_token': refresh_tok,
             'client_id':     CLIENT_ID,
@@ -417,7 +420,7 @@ def fetch_delivery_slips(start_date: str, end_date: str) -> list:
         url = (f'{API_BASE}/delivery_slips'
                f'?issue_date_from={start_date}&issue_date_to={end_date}'
                f'&per_page={per_page}&page={page}')
-        r = requests.get(url, headers=headers, timeout=10)
+        r = misoca_session.get(url, headers=headers, timeout=10)
         if r.status_code != 200:
             raise Exception(f'Misoca API エラー: HTTP {r.status_code}')
         data = r.json()
