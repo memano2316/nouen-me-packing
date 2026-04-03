@@ -365,31 +365,56 @@ COL_WIDTHS    = [w * mm for w in COL_WIDTHS_MM]
 # ============================================================
 # トークン管理（環境変数 → ファイル の順で取得）
 # ============================================================
+
+# dyno 起動中のトークンをメモリにキャッシュ（再起動までの間、毎回試し打ちを省略）
+_token_cache: dict = {'access_token': None, 'refresh_token': None}
+
+
 def get_valid_token() -> str:
+    global _token_cache
+
+    # ① キャッシュのトークンをまず試す
+    if _token_cache['access_token']:
+        r = misoca_session.get(
+            f'{API_BASE}/delivery_slips?per_page=1&page=1',
+            headers={'Authorization': f'Bearer {_token_cache["access_token"]}'},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return _token_cache['access_token']
+        # 期限切れならキャッシュをクリアしてリフレッシュへ
+        _token_cache['access_token'] = None
+
+    # ② env var またはファイルから取得
     access_token = os.environ.get('MISOCA_ACCESS_TOKEN', '')
-    refresh_tok  = os.environ.get('MISOCA_REFRESH_TOKEN', '')
+    refresh_tok  = _token_cache['refresh_token'] or os.environ.get('MISOCA_REFRESH_TOKEN', '')
 
     # ローカル開発用：環境変数がなければファイルから読む
     if not access_token and os.path.exists(TOKEN_FILE):
         with open(TOKEN_FILE) as f:
             data = json.load(f)
         access_token = data.get('access_token', '')
-        refresh_tok  = data.get('refresh_token', '')
+        if not refresh_tok:
+            refresh_tok = data.get('refresh_token', '')
 
-    if not access_token:
+    if not access_token and not refresh_tok:
         raise Exception('MISOCA_ACCESS_TOKEN が設定されていません。Railway の環境変数を確認してください。')
 
-    # 試し打ち
-    r = misoca_session.get(
-        f'{API_BASE}/delivery_slips?per_page=1&page=1',
-        headers={'Authorization': f'Bearer {access_token}'},
-        timeout=10,
-    )
-    if r.status_code == 200:
-        return access_token
+    # ③ env var のトークンを試す（期限切れでなければそのまま使う）
+    if access_token:
+        r = misoca_session.get(
+            f'{API_BASE}/delivery_slips?per_page=1&page=1',
+            headers={'Authorization': f'Bearer {access_token}'},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            _token_cache['access_token'] = access_token
+            if refresh_tok:
+                _token_cache['refresh_token'] = refresh_tok
+            return access_token
 
-    # 401 → リフレッシュ試行
-    if r.status_code == 401 and refresh_tok:
+    # ④ 401 → リフレッシュ試行
+    if refresh_tok:
         resp = misoca_session.post(TOKEN_URL, data={
             'grant_type':    'refresh_token',
             'refresh_token': refresh_tok,
@@ -398,11 +423,14 @@ def get_valid_token() -> str:
         }, timeout=10)
         if resp.status_code == 200:
             new_data = resp.json()
+            # 新トークンをキャッシュに保持（dyno 再起動まで有効）
+            _token_cache['access_token']  = new_data.get('access_token', '')
+            _token_cache['refresh_token'] = new_data.get('refresh_token', refresh_tok)
             # ローカルならファイルも更新
             if os.path.exists(TOKEN_FILE):
                 with open(TOKEN_FILE, 'w') as f:
                     json.dump(new_data, f, indent=2)
-            return new_data.get('access_token', '')
+            return _token_cache['access_token']
 
     raise Exception('Misoca 認証エラー。トークンを更新してください。')
 
