@@ -786,11 +786,17 @@ def generate_pdf(target_date_str: str, rows: list, output) -> None:
     table = Table(table_data, colWidths=COL_WIDTHS, repeatRows=1)
     table.setStyle(TableStyle(style_cmds))
 
+    def draw_page_number(canvas, doc):
+        canvas.saveState()
+        canvas.setFont(FONT_NAME, 9)
+        canvas.drawCentredString(B5[0] / 2, 5 * mm, str(doc.page))
+        canvas.restoreState()
+
     story = [
         Paragraph(f'農園 me!　パッキングリスト　{target_date_str}', title_style),
         table,
     ]
-    doc.build(story)
+    doc.build(story, onFirstPage=draw_page_number, onLaterPages=draw_page_number)
 
 
 # ============================================================
