@@ -1,4 +1,4 @@
-name: Daily Token Health Check
+name: Daily Token Auto-Refresh
 
 on:
   schedule:
@@ -7,27 +7,97 @@ on:
   workflow_dispatch:  # 手動実行も可能
 
 jobs:
-  token-refresh:
+  refresh-token:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Misoca トークンの有効性確認・自動リフレッシュ
+      - name: Misoca トークン自動リフレッシュ
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          RESPONSE=$(curl -s -w "\n%{http_code}" https://web-production-307b4.up.railway.app/debug)
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | head -1)
+          python3 << 'PYEOF'
+          import os, sys, json, requests
 
-          echo "HTTP Status: $HTTP_CODE"
-          echo "Response: $BODY"
+          RAILWAY_TOKEN = os.environ['RAILWAY_TOKEN']
+          PROJECT_ID    = 'ee40366b-df3f-4a69-a708-c290e099290a'
+          ENV_ID        = '976c5310-a13b-4303-b90a-b2458728e79e'
+          SERVICE_ID    = 'a0871071-1b0b-49d1-885b-ef891e12fe9b'
+          CLIENT_ID     = 'uIE3rh76mv5LqgJ6UjT5W8KDAgSaw86ruoHeX92IUC0'
+          CLIENT_SECRET = 'ICLx5meAFTYqB_5yNiW-a6lZQjQJmr_r7tDN4NSK9xE'
+          TOKEN_URL     = 'https://app.misoca.jp/oauth2/token'
+          RAILWAY_API   = 'https://backboard.railway.app/graphql/v2'
 
-          if [ "$HTTP_CODE" = "200" ] && echo "$BODY" | grep -q "token OK"; then
-            echo "✅ トークン正常"
-          else
-            echo "❌ トークンエラー検出: $BODY"
-            exit 1
-          fi
+          rh = {'Authorization': f'Bearer {RAILWAY_TOKEN}', 'Content-Type': 'application/json'}
 
-      - name: エラー時の通知（GitHub Actions の失敗通知がメールで届きます）
+          # ── Step 1: Railway から現在のリフレッシュトークンを取得 ──
+          r = requests.post(RAILWAY_API,
+              json={'query': f'{{ variables(projectId: "{PROJECT_ID}", environmentId: "{ENV_ID}", serviceId: "{SERVICE_ID}") }}'},
+              headers=rh, timeout=30)
+          if r.status_code != 200:
+              print(f'❌ Railway API エラー: {r.status_code} {r.text}')
+              sys.exit(1)
+
+          vars_raw = r.json().get('data', {}).get('variables', {})
+          vars_dict = json.loads(vars_raw) if isinstance(vars_raw, str) else vars_raw
+          refresh_tok = vars_dict.get('MISOCA_REFRESH_TOKEN', '')
+
+          if not refresh_tok:
+              print('❌ MISOCA_REFRESH_TOKEN が Railway に設定されていません')
+              sys.exit(1)
+
+          print('✅ Railway からリフレッシュトークン取得完了')
+
+          # ── Step 2: Misoca でトークンリフレッシュ ──
+          resp = requests.post(TOKEN_URL, data={
+              'grant_type':    'refresh_token',
+              'refresh_token': refresh_tok,
+              'client_id':     CLIENT_ID,
+              'client_secret': CLIENT_SECRET,
+          }, timeout=30)
+
+          if resp.status_code != 200:
+              print(f'❌ Misoca リフレッシュ失敗: {resp.status_code}')
+              print(resp.text)
+              print()
+              print('→ Mac で python3 misoca_auth.py を実行して再認証してください')
+              sys.exit(1)
+
+          new_data    = resp.json()
+          new_access  = new_data.get('access_token', '')
+          new_refresh = new_data.get('refresh_token', refresh_tok)
+
+          if not new_access:
+              print(f'❌ access_token が取得できませんでした: {new_data}')
+              sys.exit(1)
+
+          print('✅ 新しいトークン取得成功')
+
+          # ── Step 3: Railway 環境変数を更新 ──
+          def upsert_var(name, value):
+              mutation = '''mutation {
+                variableUpsert(input: {
+                  projectId: "''' + PROJECT_ID + '''"
+                  environmentId: "''' + ENV_ID + '''"
+                  serviceId: "''' + SERVICE_ID + '''"
+                  name: "''' + name + '''"
+                  value: "''' + value + '''"
+                })
+              }'''
+              r2 = requests.post(RAILWAY_API, json={'query': mutation}, headers=rh, timeout=30)
+              if r2.status_code == 200 and 'errors' not in r2.json():
+                  print(f'  ✅ {name} 更新完了')
+              else:
+                  print(f'  ❌ {name} 更新失敗: {r2.text}')
+                  sys.exit(1)
+
+          upsert_var('MISOCA_ACCESS_TOKEN',  new_access)
+          upsert_var('MISOCA_REFRESH_TOKEN', new_refresh)
+
+          print('🎉 トークン自動リフレッシュ完了 — Railway に新トークンを保存しました')
+          PYEOF
+
+      - name: エラー時の通知メッセージ
         if: failure()
         run: |
-          echo "トークンリフレッシュに失敗しました。"
-          echo "python3 misoca_auth.py を実行して再認証してください。"
+          echo "::error::Misoca トークンのリフレッシュに失敗しました。"
+          echo "::error::Mac で 'python3 misoca_auth.py' を実行して再認証し、Railway 環境変数を手動で更新してください。"
