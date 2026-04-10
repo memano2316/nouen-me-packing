@@ -727,14 +727,7 @@ def generate_pdf(target_date_str: str, rows: list, output) -> None:
     total_take = sum(to_int(r['takeuchi']) for r in rows)
     total_lotu = sum(to_int(r['lotus'])    for r in rows)
 
-    table_data = [COL_HEADERS]
-    for r in rows:
-        table_data.append([
-            r['genre'], r['baseName'], r['g'], r['note'],
-            r['sp'], r['yokoSP'], r['mp'], r['mini'],
-            r['takeuchi'], r['lotus'],
-        ])
-    table_data.append([
+    total_row_data = [
         '合計', '', '', '',
         str(total_sp)   if total_sp   else '',
         str(total_yoko) if total_yoko else '',
@@ -742,49 +735,81 @@ def generate_pdf(target_date_str: str, rows: list, output) -> None:
         str(total_mini) if total_mini else '',
         str(total_take) if total_take else '',
         str(total_lotu) if total_lotu else '',
-    ])
-
-    total_rows = len(table_data)
-
-    style_cmds = [
-        ('FONTNAME',      (0,0), (-1,-1), FONT_NAME),
-        ('FONTSIZE',      (0,0), (-1,-1), 7),
-        ('TOPPADDING',    (0,0), (-1,-1), 2),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 2),
-        ('LEFTPADDING',   (0,0), (-1,-1), 2),
-        ('RIGHTPADDING',  (0,0), (-1,-1), 2),
-        ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
-        ('BACKGROUND',    (0,0), (3,0),   HEADER_BG),
-        ('TEXTCOLOR',     (0,0), (3,0),   HEADER_FG),
-        ('BACKGROUND',    (4,0), (-1,0),  HEADER_PACK_BG),
-        ('TEXTCOLOR',     (4,0), (-1,0),  HEADER_PACK_FG),
-        ('ALIGN',         (0,0), (-1,0),  'CENTER'),
-        ('ALIGN',         (4,1), (-1,-1), 'CENTER'),
-        ('BACKGROUND',    (0, total_rows-1), (-1, total_rows-1), TOTAL_BG),
-        ('FONTSIZE',      (0, total_rows-1), (-1, total_rows-1), 8),
-        ('INNERGRID',     (0,0), (-1,-1), 0.3, colors.HexColor('#C0C0C0')),
-        ('BOX',           (0,0), (-1,-1), 0.5, colors.grey),
-        ('LINEBELOW',     (0,0), (-1,0),  1,   colors.HexColor('#2C3E50')),
-        ('LINEAFTER',     (3,0), (3,-1),  1.5, colors.HexColor('#5D6D7E')),
     ]
 
     VALUE_COLS = [('sp', 4), ('yokoSP', 5), ('mp', 6), ('mini', 7), ('takeuchi', 8), ('lotus', 9)]
-    for i, row in enumerate(rows):
-        row_idx = i + 1
-        if row['unknown']:
-            style_cmds.append(('BACKGROUND', (0,row_idx), (-1,row_idx), UNKNOWN_COLOR))
-        else:
-            c = ROW_COLORS[(i // 5) % len(ROW_COLORS)]
-            style_cmds.append(('BACKGROUND', (0,row_idx), (-1,row_idx), c))
-        for col_key, col_idx in VALUE_COLS:
-            if row.get(col_key) not in ('', None, 0):
-                style_cmds.append(('BACKGROUND', (col_idx,row_idx), (col_idx,row_idx), colors.white))
 
-    for i in range(4, len(rows), 5):
-        style_cmds.append(('LINEBELOW', (0, i+1), (-1, i+1), 0.8, colors.HexColor('#AAC4D0')))
+    def _build_table(subset_rows, color_offset, include_total):
+        td = [COL_HEADERS]
+        for r in subset_rows:
+            td.append([
+                r['genre'], r['baseName'], r['g'], r['note'],
+                r['sp'], r['yokoSP'], r['mp'], r['mini'],
+                r['takeuchi'], r['lotus'],
+            ])
+        if include_total:
+            td.append(total_row_data)
 
-    table = Table(table_data, colWidths=COL_WIDTHS, repeatRows=1)
-    table.setStyle(TableStyle(style_cmds))
+        n_rows = len(td)
+
+        sc = [
+            ('FONTNAME',      (0,0), (-1,-1), FONT_NAME),
+            ('FONTSIZE',      (0,0), (-1,-1), 7),
+            ('TOPPADDING',    (0,0), (-1,-1), 2),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+            ('LEFTPADDING',   (0,0), (-1,-1), 2),
+            ('RIGHTPADDING',  (0,0), (-1,-1), 2),
+            ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
+            ('BACKGROUND',    (0,0), (3,0),   HEADER_BG),
+            ('TEXTCOLOR',     (0,0), (3,0),   HEADER_FG),
+            ('BACKGROUND',    (4,0), (-1,0),  HEADER_PACK_BG),
+            ('TEXTCOLOR',     (4,0), (-1,0),  HEADER_PACK_FG),
+            ('ALIGN',         (0,0), (-1,0),  'CENTER'),
+            ('ALIGN',         (4,1), (-1,-1), 'CENTER'),
+            ('INNERGRID',     (0,0), (-1,-1), 0.3, colors.HexColor('#C0C0C0')),
+            ('BOX',           (0,0), (-1,-1), 0.5, colors.grey),
+            ('LINEBELOW',     (0,0), (-1,0),  1,   colors.HexColor('#2C3E50')),
+            ('LINEAFTER',     (3,0), (3,-1),  1.5, colors.HexColor('#5D6D7E')),
+        ]
+
+        if include_total:
+            sc.append(('BACKGROUND', (0, n_rows-1), (-1, n_rows-1), TOTAL_BG))
+            sc.append(('FONTSIZE',   (0, n_rows-1), (-1, n_rows-1), 8))
+
+        for i, row in enumerate(subset_rows):
+            row_idx = i + 1
+            if row['unknown']:
+                sc.append(('BACKGROUND', (0,row_idx), (-1,row_idx), UNKNOWN_COLOR))
+            else:
+                c = ROW_COLORS[((i + color_offset) // 5) % len(ROW_COLORS)]
+                sc.append(('BACKGROUND', (0,row_idx), (-1,row_idx), c))
+            for col_key, col_idx in VALUE_COLS:
+                if row.get(col_key) not in ('', None, 0):
+                    sc.append(('BACKGROUND', (col_idx,row_idx), (col_idx,row_idx), colors.white))
+
+        for i in range(4, len(subset_rows), 5):
+            sc.append(('LINEBELOW', (0, i+1), (-1, i+1), 0.8, colors.HexColor('#AAC4D0')))
+
+        t = Table(td, colWidths=COL_WIDTHS, repeatRows=1)
+        t.setStyle(TableStyle(sc))
+        return t
+
+    # エディブルフラワー先頭行を探してテーブルを分割（ページ先頭から始まるよう強制改ページ）
+    split_idx = next(
+        (i for i, r in enumerate(rows) if r['genre'] == 'エディブルフラワー'),
+        None
+    )
+
+    if split_idx is None or split_idx == 0:
+        table_items = [_build_table(rows, 0, include_total=True)]
+    else:
+        rows_part1 = rows[:split_idx]
+        rows_part2 = rows[split_idx:]
+        table_items = [
+            _build_table(rows_part1, 0,         include_total=False),
+            PageBreak(),
+            _build_table(rows_part2, split_idx, include_total=True),
+        ]
 
     def draw_page_number(canvas, doc):
         canvas.saveState()
@@ -792,10 +817,7 @@ def generate_pdf(target_date_str: str, rows: list, output) -> None:
         canvas.drawCentredString(B5[0] / 2, 5 * mm, str(doc.page))
         canvas.restoreState()
 
-    story = [
-        Paragraph(f'農園 me!　パッキングリスト　{target_date_str}', title_style),
-        table,
-    ]
+    story = [Paragraph(f'農園 me!　パッキングリスト　{target_date_str}', title_style)] + table_items
     doc.build(story, onFirstPage=draw_page_number, onLaterPages=draw_page_number)
 
 
