@@ -23,7 +23,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 app = Flask(__name__)
 
@@ -818,6 +818,96 @@ def generate_pdf(target_date_str: str, rows: list, output) -> None:
         canvas.restoreState()
 
     story = [Paragraph(f'農園 me!　パッキングリスト　{target_date_str}', title_style)] + table_items
+
+    # ── サマリーページ ──────────────────────────────────────────
+    SUMMARY_TARGETS = [
+        {'label': 'マイクロリーフサラダミックス', 'genre': 'マイクロリーフ', 'name_key': 'サラダミックス'},
+        {'label': 'チルドレンハーブミックス',     'genre': 'チルドレン',     'name_key': 'ハーブミックス'},
+        {'label': 'チルドレン',                   'name_key': 'チルドレン',  'name_exclude': 'ハーブミックス'},
+    ]
+
+    def _to_int(v):
+        try: return int(v)
+        except: return 0
+
+    summaries = []
+    for tgt in SUMMARY_TARGETS:
+        total_g = 0.0
+        parts   = []
+        for r in rows:
+            if tgt['name_key'] not in r['baseName']:
+                continue
+            if tgt.get('name_exclude') and tgt['name_exclude'] in r['baseName']:
+                continue
+            if 'genre' in tgt and r['genre'] != tgt['genre']:
+                continue
+            g_val   = float(r['g']) if r['g'] else 0
+            packs   = _to_int(r['sp']) + _to_int(r['yokoSP']) + _to_int(r['mp']) + _to_int(r['mini'])
+            take_g  = _to_int(r['takeuchi'])
+            lotu_g  = _to_int(r['lotus'])
+            row_g   = packs * g_val + take_g + lotu_g
+            if row_g == 0:
+                continue
+            total_g += row_g
+            if packs > 0 and g_val > 0:
+                g_disp = int(g_val) if g_val == int(g_val) else g_val
+                parts.append(f'{g_disp}g×{packs}')
+            if take_g > 0:
+                parts.append(f'タケウチ{take_g}g')
+            if lotu_g > 0:
+                parts.append(f'ロテュス{lotu_g}g')
+        if total_g > 0:
+            t_disp = int(total_g) if total_g == int(total_g) else total_g
+            summaries.append({
+                'label':     tgt['label'],
+                'total_g':   t_disp,
+                'breakdown': '、'.join(parts),
+            })
+
+    # ── 最終ページは常に追加（挨拶・集計・備考欄）──────────────
+    greet_style = ParagraphStyle(
+        'greet', fontName=FONT_NAME, fontSize=11, leading=20, spaceAfter=6*mm,
+    )
+    item_style = ParagraphStyle(
+        'sumitem', fontName=FONT_NAME, fontSize=11, leading=22, spaceAfter=4*mm,
+    )
+    section_style = ParagraphStyle(
+        'section', fontName=FONT_NAME, fontSize=10, leading=16, spaceAfter=2*mm,
+    )
+
+    greeting_text = (
+        'まのくん、りさちゃん、こんにちは。<br/><br/>'
+        'いつも丁寧なパック詰めをありがとう。<br/>'
+        'お客様への感謝の気持ちを忘れずに、愛情をもってパック詰めをしてください。<br/>'
+        'いつも応援しています。よろしくお願いします。'
+    )
+
+    story.append(PageBreak())
+    story.append(Paragraph(greeting_text, greet_style))
+    story.append(Spacer(1, 4*mm))
+
+    for s in summaries:
+        line = (
+            f'本日の{s["label"]}の出荷量は合計 {s["total_g"]}g になります。'
+            f'（{s["breakdown"]}）'
+        )
+        story.append(Paragraph(line, item_style))
+
+    story.append(Spacer(1, 8*mm))
+
+    story.append(Paragraph('備考・メモ欄', section_style))
+    memo_table = Table(
+        [[''], [''], [''], [''], [''], ['']],
+        colWidths=[156*mm],
+        rowHeights=[10*mm] * 6,
+    )
+    memo_table.setStyle(TableStyle([
+        ('BOX',        (0, 0), (-1, -1), 1,   colors.black),
+        ('INNERGRID',  (0, 0), (-1, -1), 0.3, colors.HexColor('#C0C0C0')),
+        ('FONTNAME',   (0, 0), (-1, -1), FONT_NAME),
+    ]))
+    story.append(memo_table)
+
     doc.build(story, onFirstPage=draw_page_number, onLaterPages=draw_page_number)
 
 
