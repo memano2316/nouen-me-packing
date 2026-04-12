@@ -908,6 +908,51 @@ def generate_pdf(target_date_str: str, rows: list, output) -> None:
     ]))
     story.append(memo_table)
 
+    # ── エディブルフラワー収穫数ページ（最終ページ）──────────────
+    def to_int(v):
+        try: return int(v)
+        except: return 0
+
+    harvest_data = []
+    for r in rows:
+        if r['genre'] != 'エディブルフラワー' or r.get('unknown', False):
+            continue
+        total_packs = (to_int(r['sp']) + to_int(r['yokoSP']) +
+                       to_int(r['mp']) + to_int(r['mini']) +
+                       to_int(r['takeuchi']) + to_int(r['lotus']))
+        if total_packs == 0:
+            continue
+        rinsu = float(r['g']) if r['g'] else 0
+        harvest_count = round(rinsu * total_packs) if rinsu > 0 else total_packs
+        harvest_data.append([f'エディブルフラワー {r["baseName"]}', str(harvest_count)])
+
+    if harvest_data:
+        story.append(PageBreak())
+        harvest_title_style = ParagraphStyle(
+            'harvest_title', fontName=FONT_NAME, fontSize=11, leading=16, spaceAfter=4*mm,
+        )
+        story.append(Paragraph('エディブルフラワー収穫数', harvest_title_style))
+        h_table_data = [['品番・品名', '収穫数']] + harvest_data
+        harvest_table = Table(h_table_data, colWidths=[120*mm, 30*mm], repeatRows=1)
+        harvest_table.setStyle(TableStyle([
+            ('FONTNAME',      (0, 0), (-1, -1), FONT_NAME),
+            ('FONTSIZE',      (0, 0), (-1, -1), 8),
+            ('TOPPADDING',    (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 4),
+            ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+            ('BACKGROUND',    (0, 0), (-1, 0),  colors.HexColor('#2C3E50')),
+            ('TEXTCOLOR',     (0, 0), (-1, 0),  colors.white),
+            ('FONTSIZE',      (0, 0), (-1, 0),  9),
+            ('ALIGN',         (0, 0), (-1, 0),  'CENTER'),
+            ('ALIGN',         (1, 1), (1, -1),  'CENTER'),
+            ('INNERGRID',     (0, 0), (-1, -1), 0.3, colors.HexColor('#C0C0C0')),
+            ('BOX',           (0, 0), (-1, -1), 0.5, colors.grey),
+            ('LINEBELOW',     (0, 0), (-1, 0),  1,   colors.HexColor('#2C3E50')),
+        ]))
+        story.append(harvest_table)
+
     doc.build(story, onFirstPage=draw_page_number, onLaterPages=draw_page_number)
 
 
