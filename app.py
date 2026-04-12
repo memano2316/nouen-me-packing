@@ -702,9 +702,29 @@ def build_rows_in_master_order(aggregated: list) -> list:
 
 
 # ============================================================
+# 売上合計計算
+# ============================================================
+def compute_total_sales(slips: list) -> int:
+    """当日の全納品書の合計金額（税込）を返す"""
+    total = 0
+    for slip in slips:
+        # トップレベルにある場合
+        amount = slip.get('total_amount_including_tax') or slip.get('total_amount_with_tax')
+        if amount is None:
+            # body ネスト構造の場合
+            body = slip.get('body', {}) or {}
+            amount = body.get('total_amount_including_tax') or body.get('total_amount_with_tax') or 0
+        try:
+            total += int(float(amount or 0))
+        except Exception:
+            pass
+    return total
+
+
+# ============================================================
 # PDF 生成（BytesIO バッファ対応版）
 # ============================================================
-def generate_pdf(target_date_str: str, rows: list, output) -> None:
+def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0) -> None:
     """output は ファイルパス文字列 または BytesIO バッファ"""
     doc = SimpleDocTemplate(
         output, pagesize=B5,
@@ -895,6 +915,43 @@ def generate_pdf(target_date_str: str, rows: list, output) -> None:
 
     story.append(Spacer(1, 8*mm))
 
+    # ── 特定品目の有無・売上確認 ──────────────────────────────────
+    notice_style = ParagraphStyle(
+        'notice', fontName=FONT_NAME, fontSize=11, leading=22, spaceAfter=2*mm,
+    )
+
+    def _sum_packs(genre, name_contains):
+        t = 0
+        for r in rows:
+            if r['genre'] == genre and name_contains in r['baseName']:
+                for col in ['sp', 'yokoSP', 'mp', 'mini', 'takeuchi', 'lotus']:
+                    try:
+                        t += int(r[col])
+                    except Exception:
+                        pass
+        return t
+
+    salada_n   = _sum_packs('マイクロリーフ', 'サラダミックス')
+    children_n = _sum_packs('その他', 'チルドレン')
+    herb_n     = _sum_packs('チルドレン', 'ハーブミックス')
+
+    salada_disp   = f'{salada_n}パック'   if salada_n   > 0 else 'ゼロです'
+    children_disp = f'{children_n}パック' if children_n > 0 else 'ゼロです'
+    herb_disp     = f'{herb_n}パック'     if herb_n     > 0 else 'ゼロです'
+
+    notice_text = (
+        f'サラダミックス：{salada_disp}　'
+        f'チルドレン：{children_disp}　'
+        f'チルドレンハーブミックス：{herb_disp}'
+    )
+    story.append(Paragraph(notice_text, notice_style))
+
+    if total_sales > 0:
+        sales_text = f'本日の売上は {total_sales:,}円です'
+        story.append(Paragraph(sales_text, notice_style))
+
+    story.append(Spacer(1, 4*mm))
+
     story.append(Paragraph('備考・メモ欄', section_style))
     memo_table = Table(
         [[''], [''], [''], [''], [''], ['']],
@@ -1069,14 +1126,15 @@ def generate():
         return '日付の形式が正しくありません', 400
 
     try:
-        slips      = fetch_delivery_slips(target_date, target_date)
-        items      = process_slips(slips)
-        aggregated = aggregate_items(items)
-        rows       = build_rows_in_master_order(aggregated)
+        slips       = fetch_delivery_slips(target_date, target_date)
+        items       = process_slips(slips)
+        aggregated  = aggregate_items(items)
+        rows        = build_rows_in_master_order(aggregated)
+        total_sales = compute_total_sales(slips)
         date_str_jp = datetime.strptime(target_date, '%Y-%m-%d').strftime('%Y年%m月%d日')
 
         buf = io.BytesIO()
-        generate_pdf(date_str_jp, rows, buf)
+        generate_pdf(date_str_jp, rows, buf, total_sales=total_sales)
         buf.seek(0)
 
         filename = f'パッキングリスト_{target_date.replace("-", "")}.pdf'
