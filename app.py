@@ -924,7 +924,9 @@ def generate_pdf(target_date_str: str, rows: list, output) -> None:
             continue
         rinsu = float(r['g']) if r['g'] else 0
         harvest_count = round(rinsu * total_packs) if rinsu > 0 else total_packs
-        harvest_data.append([f'エディブルフラワー {r["baseName"]}', str(harvest_count)])
+        rinsu_int = int(rinsu) if rinsu == int(rinsu) else rinsu
+        formula = f'{rinsu_int}輪 × {total_packs}パック' if rinsu > 0 else f'{total_packs}パック'
+        harvest_data.append([f'エディブルフラワー {r["baseName"]}', formula, str(harvest_count)])
 
     if harvest_data:
         story.append(PageBreak())
@@ -932,8 +934,8 @@ def generate_pdf(target_date_str: str, rows: list, output) -> None:
             'harvest_title', fontName=FONT_NAME, fontSize=11, leading=16, spaceAfter=4*mm,
         )
         story.append(Paragraph('エディブルフラワー収穫数', harvest_title_style))
-        h_table_data = [['品番・品名', '収穫数']] + harvest_data
-        harvest_table = Table(h_table_data, colWidths=[120*mm, 30*mm], repeatRows=1)
+        h_table_data = [['品番・品名', '計算式', '収穫数']] + harvest_data
+        harvest_table = Table(h_table_data, colWidths=[80*mm, 45*mm, 25*mm], repeatRows=1)
         harvest_table.setStyle(TableStyle([
             ('FONTNAME',      (0, 0), (-1, -1), FONT_NAME),
             ('FONTSIZE',      (0, 0), (-1, -1), 8),
@@ -947,6 +949,7 @@ def generate_pdf(target_date_str: str, rows: list, output) -> None:
             ('FONTSIZE',      (0, 0), (-1, 0),  9),
             ('ALIGN',         (0, 0), (-1, 0),  'CENTER'),
             ('ALIGN',         (1, 1), (1, -1),  'CENTER'),
+            ('ALIGN',         (2, 1), (2, -1),  'CENTER'),
             ('INNERGRID',     (0, 0), (-1, -1), 0.3, colors.HexColor('#C0C0C0')),
             ('BOX',           (0, 0), (-1, -1), 0.5, colors.grey),
             ('LINEBELOW',     (0, 0), (-1, 0),  1,   colors.HexColor('#2C3E50')),
