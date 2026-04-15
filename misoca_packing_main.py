@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-農園 me! パッキングリスト Web アプリ（Railway デプロイ用）
-iPhone Safari からアクセス → 日付を入力 → PDF をブラウザで開く
+農園 me! パッキングリスト 本番スクリプト
+Misoca API から納品書を取得 → 集計 → B5 PDF 生成 → iCloud Drive に保存
 
-環境変数:
-  MISOCA_ACCESS_TOKEN   : Misoca アクセストークン
-  MISOCA_REFRESH_TOKEN  : Misoca リフレッシュトークン
+使い方:
+  python3 misoca_packing_main.py              # 当日の納品書
+  python3 misoca_packing_main.py 2026-03-29   # 日付指定
 """
 
-import io
 import json
 import os
 import re
+import sys
 from datetime import date, datetime
 
 import requests
-from flask import Flask, request, send_file, render_template_string
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import B5
 from reportlab.lib.styles import ParagraphStyle
@@ -25,16 +24,14 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-app = Flask(__name__)
-
-# Misoca API との通信に使うセッション（TCP/TLS 接続を再利用して高速化）
-misoca_session = requests.Session()
-
 # ============================================================
 # 設定
 # ============================================================
-TOKEN_FILE    = os.path.expanduser('~/.misoca_token.json')
-API_BASE      = 'https://app.misoca.jp/api/v3'
+TOKEN_FILE  = os.path.expanduser('~/.misoca_token.json')
+ICLOUD_DIR  = os.path.expanduser(
+    '~/Library/Mobile Documents/com~apple~CloudDocs/農園me_パッキングリスト'
+)
+API_BASE    = 'https://app.misoca.jp/api/v3'
 CLIENT_ID     = 'uIE3rh76mv5LqgJ6UjT5W8KDAgSaw86ruoHeX92IUC0'
 CLIENT_SECRET = 'ICLx5meAFTYqB_5yNiW-a6lZQjQJmr_r7tDN4NSK9xE'
 TOKEN_URL     = 'https://app.misoca.jp/oauth2/token'
@@ -51,7 +48,7 @@ NOTE_MAP = {
 }
 
 # ============================================================
-# 商品マスター
+# 商品マスター（GAS の MASTER_DATA_EMBEDDED と同一）
 # ============================================================
 MASTER_DATA = [
     {'genre': 'チルドレン', 'name': 'ハーブミックス', 'g': '100', 'pack': 'SP'},
@@ -357,114 +354,98 @@ HEADER_PACK_BG = colors.HexColor('#1E6B3C')
 HEADER_PACK_FG = colors.HexColor('#D5F5E3')
 TOTAL_BG       = colors.HexColor('#E8F8F5')
 
-COL_HEADERS   = ['ジャンル', '品名', 'g数', '備考', 'SP', '横SP', 'MP', 'ミニ', 'タケウチ', 'ロテュス']
-COL_WIDTHS_MM = [24, 38, 12, 8, 11, 13, 11, 13, 13, 13]
-COL_WIDTHS    = [w * mm for w in COL_WIDTHS_MM]
+COL_HEADERS    = ['ジャンル', '品名', 'g数', '備考', 'SP', '横SP', 'MP', 'ミニ', 'タケウチ', 'ロテュス']
+COL_WIDTHS_MM  = [24, 38, 12, 8, 11, 13, 11, 13, 13, 13]
+COL_WIDTHS     = [w * mm for w in COL_WIDTHS_MM]
 
 
 # ============================================================
-# トークン管理（環境変数 → ファイル の順で取得）
+# トークン管理
 # ============================================================
+def load_token() -> str:
+    if not os.path.exists(TOKEN_FILE):
+        print('❌ トークンファイルが見つかりません。misoca_auth.py を実行して認証してください。')
+        sys.exit(1)
+    with open(TOKEN_FILE) as f:
+        data = json.load(f)
+    return data.get('access_token', '')
 
-# dyno 起動中のトークンをメモリにキャッシュ（再起動までの間、毎回試し打ちを省略）
-_token_cache: dict = {'access_token': None, 'refresh_token': None}
+
+def refresh_token(refresh_tok: str) -> str:
+    resp = requests.post(TOKEN_URL, data={
+        'grant_type':    'refresh_token',
+        'refresh_token': refresh_tok,
+        'client_id':     CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+    })
+    if resp.status_code != 200:
+        return ''
+    new_data = resp.json()
+    with open(TOKEN_FILE, 'w') as f:
+        json.dump(new_data, f, indent=2)
+    return new_data.get('access_token', '')
 
 
 def get_valid_token() -> str:
-    global _token_cache
-
-    # ① キャッシュのトークンをまず試す
-    if _token_cache['access_token']:
-        r = misoca_session.get(
-            f'{API_BASE}/delivery_slips?per_page=1&page=1',
-            headers={'Authorization': f'Bearer {_token_cache["access_token"]}'},
-            timeout=10,
-        )
-        if r.status_code == 200:
-            return _token_cache['access_token']
-        # 期限切れならキャッシュをクリアしてリフレッシュへ
-        _token_cache['access_token'] = None
-
-    # ② env var またはファイルから取得
-    access_token = os.environ.get('MISOCA_ACCESS_TOKEN', '')
-    refresh_tok  = _token_cache['refresh_token'] or os.environ.get('MISOCA_REFRESH_TOKEN', '')
-
-    # ローカル開発用：環境変数がなければファイルから読む
-    if not access_token and os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE) as f:
-            data = json.load(f)
-        access_token = data.get('access_token', '')
-        if not refresh_tok:
-            refresh_tok = data.get('refresh_token', '')
-
-    if not access_token and not refresh_tok:
-        raise Exception('MISOCA_ACCESS_TOKEN が設定されていません。Railway の環境変数を確認してください。')
-
-    # ③ env var のトークンを試す（期限切れでなければそのまま使う）
-    if access_token:
-        r = misoca_session.get(
-            f'{API_BASE}/delivery_slips?per_page=1&page=1',
-            headers={'Authorization': f'Bearer {access_token}'},
-            timeout=10,
-        )
-        if r.status_code == 200:
-            _token_cache['access_token'] = access_token
-            if refresh_tok:
-                _token_cache['refresh_token'] = refresh_tok
-            return access_token
-
-    # ④ 401 → リフレッシュ試行
-    if refresh_tok:
-        resp = misoca_session.post(TOKEN_URL, data={
-            'grant_type':    'refresh_token',
-            'refresh_token': refresh_tok,
-            'client_id':     CLIENT_ID,
-            'client_secret': CLIENT_SECRET,
-        }, timeout=10)
-        if resp.status_code == 200:
-            new_data = resp.json()
-            # 新トークンをキャッシュに保持（dyno 再起動まで有効）
-            _token_cache['access_token']  = new_data.get('access_token', '')
-            _token_cache['refresh_token'] = new_data.get('refresh_token', refresh_tok)
-            # ローカルならファイルも更新
-            if os.path.exists(TOKEN_FILE):
-                with open(TOKEN_FILE, 'w') as f:
-                    json.dump(new_data, f, indent=2)
-            return _token_cache['access_token']
-
-    raise Exception('Misoca 認証エラー。トークンを更新してください。')
+    with open(TOKEN_FILE) as f:
+        data = json.load(f)
+    token = data.get('access_token', '')
+    # 試し打ち
+    r = requests.get(
+        f'{API_BASE}/delivery_slips?per_page=1&page=1',
+        headers={'Authorization': f'Bearer {token}'},
+    )
+    if r.status_code == 200:
+        return token
+    # 401 → リフレッシュ試行
+    if r.status_code == 401 and data.get('refresh_token'):
+        print('アクセストークン期限切れ。リフレッシュ中...')
+        new_token = refresh_token(data['refresh_token'])
+        if new_token:
+            print('✅ トークンをリフレッシュしました。')
+            return new_token
+    print('❌ 認証エラー。misoca_auth.py を再実行して認証してください。')
+    sys.exit(1)
 
 
 # ============================================================
 # Misoca API：納品書取得
 # ============================================================
 def fetch_delivery_slips(start_date: str, end_date: str) -> list:
-    token   = get_valid_token()
+    token = get_valid_token()
     headers = {'Authorization': f'Bearer {token}'}
     all_slips = []
-    page, per_page = 1, 20
+    page = 1
+    per_page = 20
 
+    print(f'Misoca から納品書を取得中（{start_date} 〜 {end_date}）...')
     while page <= 50:
         url = (f'{API_BASE}/delivery_slips'
                f'?issue_date_from={start_date}&issue_date_to={end_date}'
                f'&per_page={per_page}&page={page}')
-        r = misoca_session.get(url, headers=headers, timeout=10)
+        r = requests.get(url, headers=headers)
         if r.status_code != 200:
-            raise Exception(f'Misoca API エラー: HTTP {r.status_code}')
+            print(f'❌ API エラー: HTTP {r.status_code}')
+            break
         data = r.json()
         if not isinstance(data, list) or len(data) == 0:
             break
         all_slips.extend(data)
+        print(f'  ページ {page}: {len(data)} 件（累計: {len(all_slips)} 件）')
         if len(data) < per_page:
             break
         page += 1
 
-    # クライアント側で発行日を再フィルター（APIフィルターが不完全なため）
-    return [s for s in all_slips if s.get('issue_date') == start_date]
+    print(f'取得完了（フィルター前）: {len(all_slips)} 件')
+
+    # APIの日付フィルターが不完全なため、クライアント側で発行日を再確認
+    filtered = [s for s in all_slips if s.get('issue_date') == start_date]
+    print(f'発行日 {start_date} のみ絞り込み後: {len(filtered)} 件')
+    return filtered
 
 
 # ============================================================
-# データ処理
+# データ処理（GAS の processAllSlips / aggregateItems と同一ロジック）
 # ============================================================
 def is_tokushu(customer_name: str) -> bool:
     return any(t in (customer_name or '') for t in TOKUSHU_CUSTOMERS)
@@ -472,16 +453,17 @@ def is_tokushu(customer_name: str) -> bool:
 
 KNOWN_GENRES = ['マイクロリーフ', 'エディブルフラワー', 'チルドレン', 'その他']
 
-
 def parse_item_name(raw_name: str) -> dict:
     name = re.sub(r'\s+', ' ', (raw_name or '').strip())
 
+    # ×N 形式のパック数を除去
     pack_count = 1
     m = re.search(r'[×x✕]\s*(\d+)', name, re.IGNORECASE)
     if m:
         pack_count = int(m.group(1)) or 1
         name = (name[:m.start()] + name[m.end():]).strip()
 
+    # 先頭のジャンル名を検出・除去（スペースあり・なし両対応）
     detected_genre = ''
     for genre in KNOWN_GENRES:
         if name.startswith(genre + ' ') or name.startswith(genre + '\u3000'):
@@ -493,24 +475,27 @@ def parse_item_name(raw_name: str) -> dict:
             name = name[len(genre):].strip()
             break
 
+    # 末尾の数量表記を抽出して除去（7g / 25枚 / 22輪入り / 20本入り 等）
     qty_match = re.search(
         r'(\d+(?:\.\d+)?)\s*(?:g|輪入り?|本入り?|枚入り?|個入り?|枚|本|輪|個)$',
         name, re.IGNORECASE
     )
     g = ''
     if qty_match:
-        g    = qty_match.group(1)
+        g = qty_match.group(1)
         name = name[:qty_match.start()].strip()
 
     return {'baseName': name, 'g': g, 'packCount': pack_count, 'detectedGenre': detected_genre}
 
 
 def find_pack_from_master(base_name: str, g_val: str = '', detected_genre: str = '') -> dict:
+    """品名＋g値の両方が一致する場合のみヒット。どちらか不一致は要確認。"""
     def hit(m):
         return {'genre': m['genre'], 'pack': m['pack'],
                 'master_name': m['name'], 'unknown': False}
 
     def norm(s):
+        # スペース正規化＋全角括弧→半角括弧
         return re.sub(r'\s+', ' ', s.strip()).replace('（', '(').replace('）', ')')
 
     def nsp(s):
@@ -519,26 +504,31 @@ def find_pack_from_master(base_name: str, g_val: str = '', detected_genre: str =
     normalized = norm(base_name) if base_name else ''
     nospace    = nsp(base_name)  if base_name else ''
 
+    # ① スペース・括弧正規化した品名 + g値で完全一致
     for m in MASTER_DATA:
         if norm(m['name']) == normalized and m['g'] == g_val:
             return hit(m)
 
+    # ② スペース除去＋括弧正規化した品名 + g値で一致
     for m in MASTER_DATA:
         if nsp(m['name']) == nospace and m['g'] == g_val:
             return hit(m)
 
+    # ③ ジャンル+品名の連結でマスター検索（例：エディブルフラワー+ミックス → エディブルフラワーミックス）
     if detected_genre and base_name:
         combined = nsp(detected_genre + base_name)
         for m in MASTER_DATA:
             if nsp(m['name']) == combined and m['g'] == g_val:
                 return hit(m)
 
+    # ④ 品名が空の場合、ジャンル名から始まるマスター項目を検索（例：チルドレン 100g）
     if detected_genre and not base_name:
         genre_norm = norm(detected_genre)
         for m in MASTER_DATA:
             if norm(m['name']).startswith(genre_norm) and m['g'] == g_val:
                 return hit(m)
 
+    # どれも合わず → 要確認
     return {'genre': '要確認', 'pack': 'SP', 'master_name': '', 'unknown': True}
 
 
@@ -550,6 +540,7 @@ def process_slips(slips: list) -> list:
         items    = slip.get('items') or slip.get('document_lines') or []
         for item in items:
             raw_name = item.get('name') or item.get('item_name') or ''
+            # 送料・手数料など梱包不要の行は無視
             if re.search(r'送料|手数料|配送|運賃', raw_name):
                 continue
             quantity = float(item.get('quantity') or item.get('count') or 1) or 1
@@ -557,16 +548,19 @@ def process_slips(slips: list) -> list:
             master   = find_pack_from_master(parsed['baseName'], parsed['g'], parsed['detectedGenre'])
 
             if master['unknown']:
+                # 要確認：Misocaの品名・g値をそのまま保持。ジャンルはプレフィックスから検出
                 use_name  = parsed['baseName']
                 use_g     = parsed['g']
                 use_genre = parsed['detectedGenre'] or '要確認'
                 use_pack  = 'SP'
             else:
+                # マスター一致：マスターの正式名・g値・ジャンル・パックを使用
                 use_name  = master['master_name']
-                use_g     = parsed['g']
+                use_g     = parsed['g']   # ← Misocaのg値を集計に使う（変更しない）
                 use_genre = master['genre']
                 use_pack  = master['pack']
 
+            # (ミニ) を含む品名は必ずミニパック列へ（マスター一致・未一致を問わず）
             if '(ミニ)' in use_name or '（ミニ）' in use_name:
                 use_pack = 'ミニパック'
 
@@ -604,11 +598,13 @@ def aggregate_items(items: list) -> list:
         is_lotus    = any(t in cn for t in ['le Lotus', 'Le Lotus', 'ロテュス'])
 
         if item['genre'] == 'マイクロリーフ' and (is_takeuchi or is_lotus):
+            # マイクロリーフのみ：g×数量をタケウチ・ロテュス列へ
             if is_takeuchi:
                 agg[key]['takeuchi'] += g_num * qty
             else:
                 agg[key]['lotus'] += g_num * qty
         else:
+            # エディブルフラワー・その他（タケウチ・ロテュス含む）→ 通常のパック列に合算
             p = item['pack']
             if p == 'SP':           agg[key]['sp']     += qty
             elif p == '横SP':       agg[key]['yokoSP'] += qty
@@ -619,9 +615,12 @@ def aggregate_items(items: list) -> list:
 
 
 def build_rows_in_master_order(aggregated: list) -> list:
+    """マスター順に並べ、注文ゼロ品目も含めてすべて出力。
+    要確認品目は最も名前が近いマスター行の直後に挿入する。"""
+
     def make_agg_row(a, unknown=True):
         return {
-            'genre':    a['genre'],
+            'genre':    a['genre'] if not unknown else (a['genre'] if a['genre'] != '要確認' else '要確認'),
             'baseName': a['baseName'],
             'g':        a['g'],
             'note':     '',
@@ -634,6 +633,7 @@ def build_rows_in_master_order(aggregated: list) -> list:
             'unknown':  unknown,
         }
 
+    # ① マスター行を順番通りに構築
     lookup = {(a['genre'] + '|' + a['baseName'] + '|' + a['g']): a for a in aggregated}
     master_rows = []
     used = set()
@@ -657,9 +657,12 @@ def build_rows_in_master_order(aggregated: list) -> list:
             'unknown':  False,
         })
 
+    # ② 要確認品目を収集
     unknowns = [a for a in aggregated if (a['genre'] + '|' + a['baseName'] + '|' + a['g']) not in used]
 
+    # ③ 各要確認品目の挿入位置を決定（最も名前が近いマスター行の直後）
     def best_insert_idx(unknown_name, unknown_genre):
+        """ジャンル一致を優先しつつ、名前が最も近いマスター行の直後を返す。"""
         u_ns = re.sub(r'\s+', '', unknown_name)
 
         def name_similar(mr_name):
@@ -669,19 +672,24 @@ def build_rows_in_master_order(aggregated: list) -> list:
                     or u_ns in mr_ns
                     or (len(u_ns) >= 4 and mr_ns[:4] == u_ns[:4]))
 
+        # ① ジャンル一致 + 名前類似
         last_hit = -1
         for i, mr in enumerate(master_rows):
             if mr['genre'] == unknown_genre and name_similar(mr['baseName']):
                 last_hit = i
+
         if last_hit >= 0:
             return last_hit
 
+        # ② ジャンル不問で名前類似（ジャンル一致なし時のフォールバック）
         for i, mr in enumerate(master_rows):
             if name_similar(mr['baseName']):
                 last_hit = i
-        return last_hit
 
-    insert_map = {}
+        return last_hit  # -1 なら末尾
+
+    # 挿入位置ごとにグループ化（同位置は元の順序を保つ）
+    insert_map = {}   # {master_idx: [unknown agg items]}
     no_match   = []
     for a in unknowns:
         idx = best_insert_idx(a['baseName'], a['genre'])
@@ -690,11 +698,14 @@ def build_rows_in_master_order(aggregated: list) -> list:
         else:
             no_match.append(a)
 
+    # ④ マスター行 + 挿入行を合成
     final_rows = []
     for i, mr in enumerate(master_rows):
         final_rows.append(mr)
         for a in insert_map.get(i, []):
             final_rows.append(make_agg_row(a, unknown=True))
+
+    # 名前で近い行が見つからなかった要確認は末尾へ
     for a in no_match:
         final_rows.append(make_agg_row(a, unknown=True))
 
@@ -722,12 +733,11 @@ def compute_total_sales(slips: list) -> int:
 
 
 # ============================================================
-# PDF 生成（BytesIO バッファ対応版）
+# PDF 生成
 # ============================================================
-def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0, items: list = None) -> None:
-    """output は ファイルパス文字列 または BytesIO バッファ"""
+def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales: int = 0, items: list = None):
     doc = SimpleDocTemplate(
-        output, pagesize=B5,
+        output_path, pagesize=B5,
         leftMargin=10*mm, rightMargin=10*mm,
         topMargin=10*mm, bottomMargin=10*mm,
     )
@@ -780,22 +790,30 @@ def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0,
             ('LEFTPADDING',   (0,0), (-1,-1), 2),
             ('RIGHTPADDING',  (0,0), (-1,-1), 2),
             ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
-            ('BACKGROUND',    (0,0), (3,0),   HEADER_BG),
-            ('TEXTCOLOR',     (0,0), (3,0),   HEADER_FG),
-            ('BACKGROUND',    (4,0), (-1,0),  HEADER_PACK_BG),
-            ('TEXTCOLOR',     (4,0), (-1,0),  HEADER_PACK_FG),
-            ('ALIGN',         (0,0), (-1,0),  'CENTER'),
-            ('ALIGN',         (4,1), (-1,-1), 'CENTER'),
-            ('INNERGRID',     (0,0), (-1,-1), 0.3, colors.HexColor('#C0C0C0')),
-            ('BOX',           (0,0), (-1,-1), 0.5, colors.grey),
-            ('LINEBELOW',     (0,0), (-1,0),  1,   colors.HexColor('#2C3E50')),
-            ('LINEAFTER',     (3,0), (3,-1),  1.5, colors.HexColor('#5D6D7E')),
+            # ヘッダー（左側）
+            ('BACKGROUND', (0,0), (3,0),  HEADER_BG),
+            ('TEXTCOLOR',  (0,0), (3,0),  HEADER_FG),
+            # ヘッダー（パック列）
+            ('BACKGROUND', (4,0), (-1,0), HEADER_PACK_BG),
+            ('TEXTCOLOR',  (4,0), (-1,0), HEADER_PACK_FG),
+            ('ALIGN',      (0,0), (-1,0), 'CENTER'),
+            # 数値列は中央揃え
+            ('ALIGN',      (4,1), (-1,-1), 'CENTER'),
+            # 全行・全列の薄い罫線
+            ('INNERGRID',  (0,0), (-1,-1), 0.3, colors.HexColor('#C0C0C0')),
+            # 外枠
+            ('BOX',        (0,0), (-1,-1), 0.5, colors.grey),
+            # ヘッダー下線
+            ('LINEBELOW',  (0,0), (-1,0),  1,   colors.HexColor('#2C3E50')),
+            # 備考 | SP 区切り縦線
+            ('LINEAFTER',  (3,0), (3,-1),  1.5, colors.HexColor('#5D6D7E')),
         ]
 
         if include_total:
             sc.append(('BACKGROUND', (0, n_rows-1), (-1, n_rows-1), TOTAL_BG))
             sc.append(('FONTSIZE',   (0, n_rows-1), (-1, n_rows-1), 8))
 
+        # 5行ごとの背景色 + 要確認オレンジ + 数値セル白背景
         for i, row in enumerate(subset_rows):
             row_idx = i + 1
             if row['unknown']:
@@ -807,6 +825,7 @@ def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0,
                 if row.get(col_key) not in ('', None, 0):
                     sc.append(('BACKGROUND', (col_idx,row_idx), (col_idx,row_idx), colors.white))
 
+        # 5行ごとの区切り線
         for i in range(4, len(subset_rows), 5):
             sc.append(('LINEBELOW', (0, i+1), (-1, i+1), 0.8, colors.HexColor('#AAC4D0')))
 
@@ -1012,6 +1031,7 @@ def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0,
 
     story.append(Spacer(1, 2*mm))
 
+    # 備考欄
     story.append(Paragraph('備考・メモ欄', section_style))
     memo_table = Table(
         [[''], [''], [''], ['']],
@@ -1026,10 +1046,8 @@ def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0,
     story.append(memo_table)
 
     # ── エディブルフラワー収穫数ページ（最終ページ）──────────────
-    def to_int(v):
-        try: return int(v)
-        except: return 0
-
+    # ジャンル「エディブルフラワー」のみ、合計パック数>0の品目を表示
+    # 収穫数 = 輪数(g) × 合計パック数（sp+横SP+MP+ミニ+タケウチ+ロテュス）
     harvest_data = []
     for r in rows:
         if r['genre'] != 'エディブルフラワー' or r.get('unknown', False):
@@ -1051,8 +1069,13 @@ def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0,
             'harvest_title', fontName=FONT_NAME, fontSize=11, leading=16, spaceAfter=4*mm,
         )
         story.append(Paragraph('エディブルフラワー収穫数', harvest_title_style))
+
         h_table_data = [['品番・品名', '計算式', '収穫数']] + harvest_data
-        harvest_table = Table(h_table_data, colWidths=[80*mm, 45*mm, 25*mm], repeatRows=1)
+        harvest_table = Table(
+            h_table_data,
+            colWidths=[80*mm, 45*mm, 25*mm],
+            repeatRows=1,
+        )
         harvest_table.setStyle(TableStyle([
             ('FONTNAME',      (0, 0), (-1, -1), FONT_NAME),
             ('FONTSIZE',      (0, 0), (-1, -1), 8),
@@ -1074,158 +1097,63 @@ def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0,
         story.append(harvest_table)
 
     doc.build(story, onFirstPage=draw_page_number, onLaterPages=draw_page_number)
+    print(f'✅ PDF 生成完了: {output_path}')
 
 
 # ============================================================
-# HTML テンプレート
+# メイン
 # ============================================================
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>農園 me! パッキングリスト</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, 'Hiragino Sans', sans-serif;
-      background: #f0f4f0;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      padding: 20px;
-    }
-    .card {
-      background: white;
-      border-radius: 16px;
-      padding: 36px 24px;
-      max-width: 400px;
-      width: 100%;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.10);
-      text-align: center;
-    }
-    .icon { font-size: 40px; margin-bottom: 8px; }
-    h1 { font-size: 22px; color: #1E6B3C; margin-bottom: 4px; }
-    .subtitle { color: #999; font-size: 13px; margin-bottom: 28px; }
-    label { display: block; font-size: 14px; color: #555; margin-bottom: 8px; text-align: left; }
-    input[type="date"] {
-      width: 100%;
-      padding: 14px 12px;
-      font-size: 18px;
-      border: 2px solid #ddd;
-      border-radius: 10px;
-      margin-bottom: 20px;
-      color: #333;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-    input[type="date"]:focus { border-color: #1E6B3C; }
-    button {
-      width: 100%;
-      padding: 16px;
-      font-size: 18px;
-      font-weight: bold;
-      background: #1E6B3C;
-      color: white;
-      border: none;
-      border-radius: 10px;
-      cursor: pointer;
-      transition: background 0.2s, transform 0.1s;
-    }
-    button:active { background: #155a30; transform: scale(0.98); }
-    button:disabled { background: #aaa; cursor: not-allowed; }
-    .status { margin-top: 16px; font-size: 14px; color: #888; min-height: 20px; }
-    .error { color: #e74c3c !important; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="icon">🌿</div>
-    <h1>農園 me!</h1>
-    <p class="subtitle">パッキングリスト生成</p>
-    <form id="form" action="/generate" method="post" target="_blank">
-      <label>対象日</label>
-      <input type="date" name="date" id="date" value="{{ today }}" required>
-      <button type="submit" id="btn">PDF を生成する</button>
-    </form>
-    <p class="status" id="status"></p>
-  </div>
-  <script>
-    document.getElementById('form').addEventListener('submit', function() {
-      var btn = document.getElementById('btn');
-      btn.disabled = true;
-      btn.textContent = '生成中...';
-      document.getElementById('status').textContent = 'Misoca からデータを取得しています…';
-      setTimeout(function() {
-        btn.disabled = false;
-        btn.textContent = 'PDF を生成する';
-        document.getElementById('status').textContent = '';
-      }, 15000);
-    });
-  </script>
-</body>
-</html>"""
+def main():
+    if len(sys.argv) >= 2:
+        target_date = sys.argv[1]
+        try:
+            datetime.strptime(target_date, '%Y-%m-%d')
+        except ValueError:
+            print('❌ 日付形式エラー。例: python3 misoca_packing_main.py 2026-03-29')
+            sys.exit(1)
+    else:
+        target_date = date.today().strftime('%Y-%m-%d')
 
+    date_str_jp = datetime.strptime(target_date, '%Y-%m-%d').strftime('%Y年%m月%d日')
+    print('=' * 55)
+    print(f'農園 me! パッキングリスト生成')
+    print(f'対象日: {target_date}')
+    print('=' * 55)
 
-# ============================================================
-# Flask ルート
-# ============================================================
-@app.route('/')
-def index():
-    today = date.today().strftime('%Y-%m-%d')
-    return render_template_string(HTML_TEMPLATE, today=today)
+    slips      = fetch_delivery_slips(target_date, target_date)
+    items      = process_slips(slips)
+    aggregated = aggregate_items(items)
+    rows       = build_rows_in_master_order(aggregated)
 
+    unknown_count = sum(1 for r in rows if r['unknown'])
+    print(f'集計完了: {len(rows)} 品目（うち要確認: {unknown_count} 件）')
 
-@app.route('/generate', methods=['POST'])
-def generate():
-    target_date = request.form.get('date', date.today().strftime('%Y-%m-%d'))
-    try:
-        datetime.strptime(target_date, '%Y-%m-%d')
-    except ValueError:
-        return '日付の形式が正しくありません', 400
+    if unknown_count > 0:
+        print('\n【要確認品目一覧】')
+        for r in rows:
+            if r['unknown']:
+                vals = []
+                if r['sp']:       vals.append(f'SP:{r["sp"]}')
+                if r['yokoSP']:   vals.append(f'横SP:{r["yokoSP"]}')
+                if r['mp']:       vals.append(f'MP:{r["mp"]}')
+                if r['mini']:     vals.append(f'ミニ:{r["mini"]}')
+                if r['takeuchi']: vals.append(f'タケウチ:{r["takeuchi"]}')
+                if r['lotus']:    vals.append(f'ロテュス:{r["lotus"]}')
+                print(f'  ジャンル:{r["genre"]} / 品名:{r["baseName"]} / g:{r["g"]} / {", ".join(vals) or "数量なし"}')
 
-    try:
-        slips       = fetch_delivery_slips(target_date, target_date)
-        items       = process_slips(slips)
-        aggregated  = aggregate_items(items)
-        rows        = build_rows_in_master_order(aggregated)
-        total_sales = compute_total_sales(slips)
-        date_str_jp = datetime.strptime(target_date, '%Y-%m-%d').strftime('%Y年%m月%d日')
+    total_sales = compute_total_sales(slips)
+    print(f'本日の売上合計（税込）: {total_sales:,}円')
 
-        buf = io.BytesIO()
-        generate_pdf(date_str_jp, rows, buf, total_sales=total_sales, items=items)
-        buf.seek(0)
+    os.makedirs(ICLOUD_DIR, exist_ok=True)
+    filename    = f'パッキングリスト_{target_date.replace("-","")}.pdf'
+    output_path = os.path.join(ICLOUD_DIR, filename)
 
-        filename = f'パッキングリスト_{target_date.replace("-", "")}.pdf'
-        return send_file(
-            buf,
-            mimetype='application/pdf',
-            as_attachment=False,
-            download_name=filename,
-        )
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        return f'<pre style="color:red;padding:20px;">エラー: {e}\n\n{tb}</pre>', 500
-    except BaseException as e:
-        import traceback
-        tb = traceback.format_exc()
-        return f'<pre style="color:red;padding:20px;">致命的エラー: {e}\n\n{tb}</pre>', 500
+    generate_pdf(date_str_jp, rows, output_path, total_sales=total_sales, items=items)
+    print(f'📂 保存先: {output_path}')
 
-
-@app.route('/debug')
-def debug():
-    import traceback
-    today = date.today().strftime('%Y-%m-%d')
-    try:
-        token = get_valid_token()
-        slips = fetch_delivery_slips(today, today)
-        return f'<pre>token OK\nslips: {len(slips)} 件</pre>'
-    except Exception as e:
-        return f'<pre style="color:red;">{e}\n{traceback.format_exc()}</pre>', 500
+    if unknown_count > 0:
+        print(f'\n⚠️  要確認品目が {unknown_count} 件あります（オレンジ行）。内容を確認してください。')
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+    main()
