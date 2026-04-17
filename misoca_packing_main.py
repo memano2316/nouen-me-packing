@@ -732,10 +732,32 @@ def compute_total_sales(slips: list) -> int:
     return total
 
 
+def compute_shipping_total(slips: list) -> int:
+    """当日の全納品書の送料合計を返す"""
+    total = 0
+    for slip in slips:
+        items = slip.get('items') or slip.get('document_lines') or []
+        for item in items:
+            raw_name = item.get('name') or item.get('item_name') or ''
+            if re.search(r'送料|手数料|配送|運賃', raw_name):
+                amount = (item.get('total_amount_including_tax') or
+                          item.get('subtotal_amount') or
+                          item.get('total_amount') or 0)
+                if not amount:
+                    price = float(item.get('price') or item.get('unit_price') or 0)
+                    qty   = float(item.get('quantity') or item.get('count') or 1)
+                    amount = price * qty
+                try:
+                    total += int(float(amount or 0))
+                except Exception:
+                    pass
+    return total
+
+
 # ============================================================
 # PDF 生成
 # ============================================================
-def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales: int = 0, items: list = None):
+def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales: int = 0, shipping_total: int = 0, items: list = None):
     doc = SimpleDocTemplate(
         output_path, pagesize=B5,
         leftMargin=10*mm, rightMargin=10*mm,
@@ -828,6 +850,25 @@ def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales
         # 5行ごとの区切り線
         for i in range(4, len(subset_rows), 5):
             sc.append(('LINEBELOW', (0, i+1), (-1, i+1), 0.8, colors.HexColor('#AAC4D0')))
+
+        # タケウチ・ロテュス列：数字があるセルを赤枠＋赤下線で強調
+        for i, row in enumerate(subset_rows):
+            row_idx = i + 1
+            try:
+                has_take = int(row.get('takeuchi') or 0) > 0
+            except (ValueError, TypeError):
+                has_take = False
+            try:
+                has_lotu = int(row.get('lotus') or 0) > 0
+            except (ValueError, TypeError):
+                has_lotu = False
+            if has_take:
+                sc.append(('BOX', (8, row_idx), (8, row_idx), 1.5, colors.red))
+            if has_lotu:
+                sc.append(('BOX', (9, row_idx), (9, row_idx), 1.5, colors.red))
+            if has_take or has_lotu:
+                right_col = 9 if has_lotu else 8
+                sc.append(('LINEBELOW', (0, row_idx), (right_col, row_idx), 1.0, colors.red))
 
         t = Table(td, colWidths=COL_WIDTHS, repeatRows=1)
         t.setStyle(TableStyle(sc))
@@ -1026,8 +1067,13 @@ def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales
     story.append(Paragraph(notice_text, notice_style))
 
     if total_sales > 0:
-        sales_text = f'本日の売上は {total_sales:,}円です'
-        story.append(Paragraph(sales_text, notice_style))
+        story.append(Paragraph(f'本日の売上は {total_sales:,}円です', notice_style))
+        if shipping_total > 0:
+            product_total = total_sales - shipping_total
+            story.append(Paragraph(
+                f'うち送料は {shipping_total:,}円　商品のみの代金は {product_total:,}円です',
+                notice_style,
+            ))
 
     story.append(Spacer(1, 2*mm))
 
@@ -1141,14 +1187,15 @@ def main():
                 if r['lotus']:    vals.append(f'ロテュス:{r["lotus"]}')
                 print(f'  ジャンル:{r["genre"]} / 品名:{r["baseName"]} / g:{r["g"]} / {", ".join(vals) or "数量なし"}')
 
-    total_sales = compute_total_sales(slips)
+    total_sales    = compute_total_sales(slips)
+    shipping_total = compute_shipping_total(slips)
     print(f'本日の売上合計（税込）: {total_sales:,}円')
 
     os.makedirs(ICLOUD_DIR, exist_ok=True)
     filename    = f'パッキングリスト_{target_date.replace("-","")}.pdf'
     output_path = os.path.join(ICLOUD_DIR, filename)
 
-    generate_pdf(date_str_jp, rows, output_path, total_sales=total_sales, items=items)
+    generate_pdf(date_str_jp, rows, output_path, total_sales=total_sales, shipping_total=shipping_total, items=items)
     print(f'📂 保存先: {output_path}')
 
     if unknown_count > 0:

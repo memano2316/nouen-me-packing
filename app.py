@@ -721,10 +721,32 @@ def compute_total_sales(slips: list) -> int:
     return total
 
 
+def compute_shipping_total(slips: list) -> int:
+    """当日の全納品書の送料合計を返す"""
+    total = 0
+    for slip in slips:
+        items = slip.get('items') or slip.get('document_lines') or []
+        for item in items:
+            raw_name = item.get('name') or item.get('item_name') or ''
+            if re.search(r'送料|手数料|配送|運賃', raw_name):
+                amount = (item.get('total_amount_including_tax') or
+                          item.get('subtotal_amount') or
+                          item.get('total_amount') or 0)
+                if not amount:
+                    price = float(item.get('price') or item.get('unit_price') or 0)
+                    qty   = float(item.get('quantity') or item.get('count') or 1)
+                    amount = price * qty
+                try:
+                    total += int(float(amount or 0))
+                except Exception:
+                    pass
+    return total
+
+
 # ============================================================
 # PDF 生成（BytesIO バッファ対応版）
 # ============================================================
-def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0, items: list = None) -> None:
+def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0, shipping_total: int = 0, items: list = None) -> None:
     """output は ファイルパス文字列 または BytesIO バッファ"""
     doc = SimpleDocTemplate(
         output, pagesize=B5,
@@ -809,6 +831,25 @@ def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0,
 
         for i in range(4, len(subset_rows), 5):
             sc.append(('LINEBELOW', (0, i+1), (-1, i+1), 0.8, colors.HexColor('#AAC4D0')))
+
+        # タケウチ・ロテュス列：数字があるセルを赤枠＋赤下線で強調
+        for i, row in enumerate(subset_rows):
+            row_idx = i + 1
+            try:
+                has_take = int(row.get('takeuchi') or 0) > 0
+            except (ValueError, TypeError):
+                has_take = False
+            try:
+                has_lotu = int(row.get('lotus') or 0) > 0
+            except (ValueError, TypeError):
+                has_lotu = False
+            if has_take:
+                sc.append(('BOX', (8, row_idx), (8, row_idx), 1.5, colors.red))
+            if has_lotu:
+                sc.append(('BOX', (9, row_idx), (9, row_idx), 1.5, colors.red))
+            if has_take or has_lotu:
+                right_col = 9 if has_lotu else 8
+                sc.append(('LINEBELOW', (0, row_idx), (right_col, row_idx), 1.0, colors.red))
 
         t = Table(td, colWidths=COL_WIDTHS, repeatRows=1)
         t.setStyle(TableStyle(sc))
@@ -1007,8 +1048,13 @@ def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0,
     story.append(Paragraph(notice_text, notice_style))
 
     if total_sales > 0:
-        sales_text = f'本日の売上は {total_sales:,}円です'
-        story.append(Paragraph(sales_text, notice_style))
+        story.append(Paragraph(f'本日の売上は {total_sales:,}円です', notice_style))
+        if shipping_total > 0:
+            product_total = total_sales - shipping_total
+            story.append(Paragraph(
+                f'うち送料は {shipping_total:,}円　商品のみの代金は {product_total:,}円です',
+                notice_style,
+            ))
 
     story.append(Spacer(1, 2*mm))
 
@@ -1186,15 +1232,16 @@ def generate():
         return '日付の形式が正しくありません', 400
 
     try:
-        slips       = fetch_delivery_slips(target_date, target_date)
-        items       = process_slips(slips)
-        aggregated  = aggregate_items(items)
-        rows        = build_rows_in_master_order(aggregated)
-        total_sales = compute_total_sales(slips)
-        date_str_jp = datetime.strptime(target_date, '%Y-%m-%d').strftime('%Y年%m月%d日')
+        slips           = fetch_delivery_slips(target_date, target_date)
+        items           = process_slips(slips)
+        aggregated      = aggregate_items(items)
+        rows            = build_rows_in_master_order(aggregated)
+        total_sales     = compute_total_sales(slips)
+        shipping_total  = compute_shipping_total(slips)
+        date_str_jp     = datetime.strptime(target_date, '%Y-%m-%d').strftime('%Y年%m月%d日')
 
         buf = io.BytesIO()
-        generate_pdf(date_str_jp, rows, buf, total_sales=total_sales, items=items)
+        generate_pdf(date_str_jp, rows, buf, total_sales=total_sales, shipping_total=shipping_total, items=items)
         buf.seek(0)
 
         filename = f'パッキングリスト_{target_date.replace("-", "")}.pdf'
