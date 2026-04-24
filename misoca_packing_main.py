@@ -1092,12 +1092,12 @@ def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales
     ]))
     story.append(memo_table)
 
-    # ── エディブルフラワー収穫数ページ（最終ページ）──────────────
-    # ジャンル「エディブルフラワー」のみ、合計パック数>0の品目を表示
-    # 収穫数 = 輪数(g) × 合計パック数（sp+横SP+MP+ミニ+タケウチ+ロテュス）
+    # ── エディブルフラワーとその他のリーフ収穫量ページ（最終ページ）──────────────
+    # ジャンル「エディブルフラワー」「その他」が対象（要確認行も含む）、合計パック数>0の品目を表示
+    # 収穫数 = g値 × 合計パック数（sp+横SP+MP+ミニ+タケウチ+ロテュス）
     harvest_data = []
     for r in rows:
-        if r['genre'] != 'エディブルフラワー' or r.get('unknown', False):
+        if r['genre'] not in ('エディブルフラワー', 'その他'):
             continue
         total_packs = (to_int(r['sp']) + to_int(r['yokoSP']) +
                        to_int(r['mp']) + to_int(r['mini']) +
@@ -1108,14 +1108,14 @@ def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales
         harvest_count = round(rinsu * total_packs) if rinsu > 0 else total_packs
         rinsu_int = int(rinsu) if rinsu == int(rinsu) else rinsu
         formula = f'{rinsu_int}輪 × {total_packs}パック' if rinsu > 0 else f'{total_packs}パック'
-        harvest_data.append([f'エディブルフラワー {r["baseName"]}', formula, str(harvest_count)])
+        harvest_data.append([f'{r["genre"]} {r["baseName"]}', formula, str(harvest_count)])
 
     if harvest_data:
         story.append(PageBreak())
         harvest_title_style = ParagraphStyle(
             'harvest_title', fontName=FONT_NAME, fontSize=11, leading=16, spaceAfter=4*mm,
         )
-        story.append(Paragraph('エディブルフラワー収穫数', harvest_title_style))
+        story.append(Paragraph('エディブルフラワーとその他のリーフ収穫量', harvest_title_style))
 
         h_table_data = [['品番・品名', '計算式', '収穫数']] + harvest_data
         harvest_table = Table(
