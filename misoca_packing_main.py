@@ -971,6 +971,20 @@ def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales
     story.append(Paragraph(greeting_text, greet_style))
     story.append(Spacer(1, 2*mm))
 
+    # le Lotus / タケウチ あり通知
+    if items:
+        alert_style = ParagraphStyle(
+            'alert', fontName=FONT_NAME, fontSize=13, leading=22, spaceAfter=2*mm,
+        )
+        has_lotus    = any(any(t in (it.get('customerName') or '') for t in ['le Lotus', 'Le Lotus', 'ロテュス']) for it in items)
+        has_takeuchi = any('タケウチ' in (it.get('customerName') or '') for it in items)
+        if has_lotus:
+            story.append(Paragraph('<b>le Lotus あります！</b>', alert_style))
+        if has_takeuchi:
+            story.append(Paragraph('<b>ラ・フロレゾン・ドゥ・タケウチ あります！</b>', alert_style))
+        if has_lotus or has_takeuchi:
+            story.append(Spacer(1, 2*mm))
+
     # 集計行は数字がある品目のみ表示（・付き）
     for s in summaries:
         line = (
