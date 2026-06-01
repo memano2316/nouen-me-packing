@@ -1289,6 +1289,280 @@ def debug():
         return f'<pre style="color:red;">{e}\n{traceback.format_exc()}</pre>', 500
 
 
+# ============================================================
+# 苗パッキングリスト（Shopify連携）
+# ============================================================
+SHOPIFY_STORE         = os.environ.get('SHOPIFY_STORE', 'me-babygreens-edibleflowers')
+SHOPIFY_CLIENT_ID_NAE = os.environ.get('SHOPIFY_CLIENT_ID', '')
+SHOPIFY_CLIENT_SECRET_NAE = os.environ.get('SHOPIFY_CLIENT_SECRET', '')
+SHOPIFY_API_VERSION_NAE   = os.environ.get('SHOPIFY_API_VERSION', '2025-10')
+
+_shopify_token_cache: dict = {}
+
+
+def _get_shopify_token() -> str:
+    import time
+    cache = _shopify_token_cache
+    if cache.get('token') and time.time() - cache.get('at', 0) < 23 * 3600:
+        return cache['token']
+    url = f'https://{SHOPIFY_STORE}.myshopify.com/admin/oauth/access_token'
+    r = requests.post(url, data={
+        'grant_type': 'client_credentials',
+        'client_id': SHOPIFY_CLIENT_ID_NAE,
+        'client_secret': SHOPIFY_CLIENT_SECRET_NAE,
+    })
+    r.raise_for_status()
+    token = r.json()['access_token']
+    cache['token'] = token
+    cache['at'] = time.time()
+    return token
+
+
+def _shopify_get(path: str, params: dict = None) -> dict:
+    token = _get_shopify_token()
+    base = f'https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION_NAE}'
+    r = requests.get(base + path, headers={'X-Shopify-Access-Token': token}, params=params)
+    r.raise_for_status()
+    return r.json()
+
+
+def _fetch_nae_orders() -> list:
+    """苗セット注文を全件取得してリスト形式で返す"""
+    from datetime import timezone, timedelta
+    JST = timezone(timedelta(hours=9))
+    data = _shopify_get('/orders.json', params={
+        'status': 'any', 'limit': 250,
+        'fields': 'id,order_number,created_at,customer,line_items',
+    })
+    result = []
+    for o in data.get('orders', []):
+        for item in o.get('line_items', []):
+            if '苗' not in item.get('title', ''):
+                continue
+            valid_props = [
+                p for p in item.get('properties', [])
+                if not p['name'].startswith('_sbb') and p['name'] != 'ギフトメッセージ'
+            ]
+            if not valid_props:
+                continue
+            c = o.get('customer') or {}
+            created = datetime.fromisoformat(
+                o['created_at'].replace('Z', '+00:00')
+            ).astimezone(JST)
+            ln = c.get('last_name') or ''
+            fn = c.get('first_name') or ''
+            result.append({
+                'order_number': o['order_number'],
+                'customer': (ln + fn).strip() or '（名前なし）',
+                'created_jst': created.strftime('%-m/%-d %H:%M'),
+                'item_title': item.get('title', ''),
+                'properties': valid_props,
+            })
+            break
+    return result
+
+
+NAE_CSS = """
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, sans-serif; background: #f5f5f0; color: #222; }
+  .header {
+    background: #2d5a27; color: #fff; padding: 16px 20px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .header h1 { font-size: 18px; font-weight: 700; }
+  .header .sub { font-size: 12px; opacity: .8; margin-top: 2px; }
+  .section { padding: 12px 16px; }
+  .order-list { list-style: none; }
+  .order-item {
+    background: #fff; border-radius: 10px; margin-bottom: 10px;
+    padding: 0; overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  }
+  .order-label {
+    display: flex; align-items: center; padding: 14px 16px;
+    cursor: pointer; gap: 14px;
+  }
+  .order-label input[type=checkbox] {
+    width: 22px; height: 22px; flex-shrink: 0; accent-color: #2d5a27;
+  }
+  .order-info { flex: 1; }
+  .order-num { font-size: 15px; font-weight: 700; color: #2d5a27; }
+  .order-meta { font-size: 13px; color: #555; margin-top: 2px; }
+  .order-title { font-size: 12px; color: #888; margin-top: 2px; }
+  .btn-row {
+    display: flex; gap: 10px; padding: 12px 16px 20px;
+  }
+  .btn {
+    flex: 1; padding: 15px; border: none; border-radius: 10px;
+    font-size: 16px; font-weight: 700; cursor: pointer;
+  }
+  .btn-primary { background: #2d5a27; color: #fff; }
+  .btn-secondary { background: #e0e0da; color: #333; }
+  .result-card {
+    background: #fff; border-radius: 10px; margin-bottom: 14px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden;
+  }
+  .result-card table { width: 100%; border-collapse: collapse; }
+  .result-card th {
+    background: #2d5a27; color: #fff; padding: 10px 14px;
+    font-size: 13px; text-align: left;
+  }
+  .result-card th:last-child { text-align: right; }
+  .result-card td { padding: 11px 14px; font-size: 14px; border-bottom: 1px solid #f0f0ea; }
+  .result-card td:last-child { text-align: right; font-weight: 700; color: #2d5a27; }
+  .result-card tr:last-child td { border-bottom: none; }
+  .total-row td { background: #f0f7ee; font-weight: 700; font-size: 15px; }
+  .order-detail { background: #fff; border-radius: 10px; margin-bottom: 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden; }
+  .order-detail-header {
+    background: #f0f7ee; padding: 10px 14px; font-size: 14px;
+    font-weight: 700; color: #2d5a27; border-bottom: 1px solid #ddd;
+  }
+  .order-detail table { width: 100%; border-collapse: collapse; }
+  .order-detail td { padding: 9px 14px; font-size: 13px; border-bottom: 1px solid #f0f0ea; }
+  .order-detail td:last-child { text-align: right; color: #555; }
+  .order-detail tr:last-child td { border-bottom: none; }
+  .empty { text-align: center; padding: 40px; color: #999; font-size: 15px; }
+  .badge {
+    display: inline-block; background: #e8f5e3; color: #2d5a27;
+    border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: 700;
+    margin-left: 6px;
+  }
+</style>
+"""
+
+
+@app.route('/nae', methods=['GET', 'POST'])
+def nae():
+    if request.method == 'GET':
+        try:
+            orders = _fetch_nae_orders()
+        except Exception as e:
+            return f'<pre style="color:red;padding:20px;">Shopify接続エラー: {e}</pre>', 500
+
+        if not orders:
+            return NAE_CSS + '<div class="header"><div><h1>苗パッキングリスト</h1></div></div>' \
+                   '<div class="empty">苗セットの注文が見つかりません</div>'
+
+        items_html = ''
+        for o in orders:
+            pot_total = 0
+            for p in o['properties']:
+                val = ''.join(c for c in str(p['value']) if c.isdigit())
+                pot_total += int(val) if val else 1
+            items_html += f"""
+            <li class="order-item">
+              <label class="order-label">
+                <input type="checkbox" name="orders" value="{o['order_number']}">
+                <div class="order-info">
+                  <div class="order-num">#{o['order_number']}
+                    <span class="badge">{pot_total}ポット</span>
+                  </div>
+                  <div class="order-meta">{o['customer']} &nbsp;·&nbsp; {o['created_jst']}</div>
+                  <div class="order-title">{o['item_title']}</div>
+                </div>
+              </label>
+            </li>"""
+
+        return render_template_string(f"""<!DOCTYPE html><html lang="ja"><head>
+<meta charset="UTF-8">{NAE_CSS}</head><body>
+<div class="header">
+  <div><h1>🌸 苗パッキングリスト</h1>
+  <div class="sub">集計する注文にチェックを入れてください</div></div>
+</div>
+<form method="post" action="/nae">
+<div class="section">
+  <ul class="order-list">{items_html}</ul>
+</div>
+<div class="btn-row">
+  <button type="button" class="btn btn-secondary" onclick="toggleAll(this)">全選択</button>
+  <button type="submit" class="btn btn-primary">集計する</button>
+</div>
+</form>
+<script>
+function toggleAll(btn){{
+  var boxes = document.querySelectorAll('input[name=orders]');
+  var allChecked = Array.from(boxes).every(b=>b.checked);
+  boxes.forEach(b=>b.checked=!allChecked);
+  btn.textContent = allChecked ? '全選択' : '全解除';
+}}
+</script>
+</body></html>""")
+
+    # POST: 集計
+    selected = request.form.getlist('orders')
+    if not selected:
+        return '<p style="padding:20px;color:red;">注文が選択されていません。<a href="/nae">戻る</a></p>'
+
+    selected_nums = set(int(n) for n in selected)
+
+    try:
+        orders = _fetch_nae_orders()
+    except Exception as e:
+        return f'<pre style="color:red;padding:20px;">Shopify接続エラー: {e}</pre>', 500
+
+    chosen = [o for o in orders if o['order_number'] in selected_nums]
+
+    from collections import defaultdict
+    totals: dict = defaultdict(int)
+    for o in chosen:
+        for p in o['properties']:
+            val = ''.join(c for c in str(p['value']) if c.isdigit())
+            totals[p['name']] += int(val) if val else 1
+
+    sorted_totals = sorted(totals.items(), key=lambda x: -x[1])
+    grand_total = sum(v for _, v in sorted_totals)
+
+    rows_html = ''
+    for name, count in sorted_totals:
+        rows_html += f'<tr><td>{name}</td><td>{count} ポット</td></tr>'
+    rows_html += f'<tr class="total-row"><td>合計</td><td>{grand_total} ポット</td></tr>'
+
+    detail_html = ''
+    for o in chosen:
+        pot_total = sum(
+            int(''.join(c for c in str(p['value']) if c.isdigit()) or '1')
+            for p in o['properties']
+        )
+        rows = ''.join(
+            f"<tr><td>{p['name']}</td><td>{p['value']}</td></tr>"
+            for p in o['properties']
+        )
+        detail_html += f"""
+        <div class="order-detail">
+          <div class="order-detail-header">
+            #{o['order_number']} {o['customer']}
+            <span style="font-weight:400;font-size:12px;margin-left:8px;">{o['created_jst']} · {pot_total}ポット</span>
+          </div>
+          <table>{rows}</table>
+        </div>"""
+
+    order_label = '・'.join(f'#{n}' for n in sorted(selected_nums))
+
+    return render_template_string(f"""<!DOCTYPE html><html lang="ja"><head>
+<meta charset="UTF-8">{NAE_CSS}</head><body>
+<div class="header">
+  <div><h1>🌸 苗パッキング集計</h1>
+  <div class="sub">{order_label}</div></div>
+</div>
+<div class="section">
+  <div class="result-card">
+    <table>
+      <thead><tr><th>品種</th><th>合計</th></tr></thead>
+      <tbody>{rows_html}</tbody>
+    </table>
+  </div>
+  <p style="font-size:13px;color:#888;margin-bottom:12px;">── 注文別内訳 ──</p>
+  {detail_html}
+</div>
+<div class="btn-row">
+  <a href="/nae" class="btn btn-secondary" style="text-align:center;text-decoration:none;line-height:normal;display:flex;align-items:center;justify-content:center;">← 戻る</a>
+</div>
+</body></html>""")
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(debug=False, host='0.0.0.0', port=port)
