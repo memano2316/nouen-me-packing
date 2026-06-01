@@ -1345,6 +1345,15 @@ def _nae_box_size(item_title: str) -> str:
         return f'段ボール120サイズ×{boxes}個'
 
 
+def _parse_box_count(box_size: str) -> tuple:
+    """段ボールサイズ文字列を (ベースサイズ名, 個数) に分解する"""
+    import re
+    m = re.search(r'×(\d+)個', box_size)
+    count = int(m.group(1)) if m else 1
+    base = box_size.split('×')[0].strip() if '×' in box_size else box_size
+    return base, count
+
+
 def _fetch_nae_orders() -> list:
     """苗セット注文を全件取得してリスト形式で返す"""
     from datetime import timezone, timedelta
@@ -1455,6 +1464,9 @@ NAE_CSS = """
     font-size: 12px; font-weight: 700; color: #e65100;
     margin-top: 4px;
   }
+  .box-summary-row td {
+    background: #fff3e0; color: #e65100; font-weight: 700; font-size: 14px;
+  }
 </style>
 """
 
@@ -1531,7 +1543,7 @@ function toggleAll(btn){{
 
     chosen = [o for o in orders if o['order_number'] in selected_nums]
 
-    from collections import defaultdict
+    from collections import defaultdict, OrderedDict
     totals: dict = defaultdict(int)
     for o in chosen:
         for p in o['properties']:
@@ -1541,10 +1553,39 @@ function toggleAll(btn){{
     sorted_totals = sorted(totals.items(), key=lambda x: -x[1])
     grand_total = sum(v for _, v in sorted_totals)
 
+    # 段ボール集計
+    order_count = len(chosen)
+    box_summary: dict = defaultdict(int)
+    total_box_count = 0
+    size_order = ['段ボール80サイズ', '段ボール100サイズ', '段ボール120サイズ']
+    for o in chosen:
+        bs = o.get('box_size', '')
+        if bs:
+            base, cnt = _parse_box_count(bs)
+            box_summary[base] += cnt
+            total_box_count += cnt
+
+    box_summary_rows = ''
+    for size in size_order:
+        if size in box_summary:
+            box_summary_rows += (
+                f'<tr class="box-summary-row">'
+                f'<td>📦 {size}</td><td>{box_summary[size]} 個</td></tr>'
+            )
+    # size_orderに含まれない未知サイズも出力
+    for size, cnt in box_summary.items():
+        if size not in size_order:
+            box_summary_rows += (
+                f'<tr class="box-summary-row">'
+                f'<td>📦 {size}</td><td>{cnt} 個</td></tr>'
+            )
+
     rows_html = ''
     for name, count in sorted_totals:
         rows_html += f'<tr><td>{name}</td><td>{count} ポット</td></tr>'
     rows_html += f'<tr class="total-row"><td>合計</td><td>{grand_total} ポット</td></tr>'
+    if box_summary_rows:
+        rows_html += box_summary_rows
 
     detail_html = ''
     for o in chosen:
@@ -1572,12 +1613,14 @@ function toggleAll(btn){{
         </div>"""
 
     order_label = '・'.join(f'#{n}' for n in sorted(selected_nums))
+    shipment_label = f'{order_count}件分・{total_box_count}個口'
 
     return render_template_string(f"""<!DOCTYPE html><html lang="ja"><head>
 <meta charset="UTF-8">{NAE_CSS}</head><body>
 <div class="header">
   <div><h1>🌸 苗パッキング集計</h1>
-  <div class="sub">{order_label}</div></div>
+  <div class="sub">{order_label}</div>
+  <div class="sub" style="margin-top:4px;font-size:13px;font-weight:700;opacity:1;">📬 {shipment_label}</div></div>
 </div>
 <div class="section">
   <div class="result-card">
