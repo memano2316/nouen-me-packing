@@ -1326,6 +1326,25 @@ def _shopify_get(path: str, params: dict = None) -> dict:
     return r.json()
 
 
+def _nae_box_size(item_title: str) -> str:
+    """苗セットのタイトルから段ボールサイズ文字列を返す"""
+    import re
+    m = re.search(r'(\d+)\s*個', item_title)
+    if not m:
+        return ''
+    n = int(m.group(1))
+    if n <= 8:
+        return '段ボール80サイズ'
+    elif n <= 12:
+        return '段ボール100サイズ'
+    elif n <= 24:
+        return '段ボール120サイズ'
+    else:
+        # 94個セットなど大容量 → 120サイズ×4個
+        boxes = -(-n // 24)  # 切り上げ
+        return f'段ボール120サイズ×{boxes}個'
+
+
 def _fetch_nae_orders() -> list:
     """苗セット注文を全件取得してリスト形式で返す"""
     from datetime import timezone, timedelta
@@ -1351,11 +1370,13 @@ def _fetch_nae_orders() -> list:
             ).astimezone(JST)
             ln = c.get('last_name') or ''
             fn = c.get('first_name') or ''
+            title = item.get('title', '')
             result.append({
                 'order_number': o['order_number'],
                 'customer': (ln + fn).strip() or '（名前なし）',
                 'created_jst': created.strftime('%-m/%-d %H:%M'),
-                'item_title': item.get('title', ''),
+                'item_title': title,
+                'box_size': _nae_box_size(title),
                 'properties': valid_props,
             })
             break
@@ -1430,6 +1451,10 @@ NAE_CSS = """
     border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: 700;
     margin-left: 6px;
   }
+  .box-size-badge {
+    font-size: 12px; font-weight: 700; color: #e65100;
+    margin-top: 4px;
+  }
 </style>
 """
 
@@ -1462,6 +1487,7 @@ def nae():
                   </div>
                   <div class="order-meta">{o['customer']} &nbsp;·&nbsp; {o['created_jst']}</div>
                   <div class="order-title">{o['item_title']}</div>
+                  {'<div class="box-size-badge">📦 ' + o['box_size'] + '</div>' if o['box_size'] else ''}
                 </div>
               </label>
             </li>"""
@@ -1530,12 +1556,18 @@ function toggleAll(btn){{
             f"<tr><td>{p['name']}</td><td>{p['value']}</td></tr>"
             for p in o['properties']
         )
+        box_html = (
+            f'<div style="background:#fff3e0;color:#e65100;font-size:13px;font-weight:700;'
+            f'padding:8px 14px;border-bottom:1px solid #ffe0b2;">📦 {o["box_size"]}</div>'
+            if o.get('box_size') else ''
+        )
         detail_html += f"""
         <div class="order-detail">
           <div class="order-detail-header">
             #{o['order_number']} {o['customer']}
             <span style="font-weight:400;font-size:12px;margin-left:8px;">{o['created_jst']} · {pot_total}ポット</span>
           </div>
+          {box_html}
           <table>{rows}</table>
         </div>"""
 
