@@ -1360,7 +1360,7 @@ def _fetch_nae_orders() -> list:
     JST = timezone(timedelta(hours=9))
     data = _shopify_get('/orders.json', params={
         'status': 'any', 'limit': 250,
-        'fields': 'id,order_number,created_at,customer,line_items',
+        'fields': 'id,order_number,created_at,customer,line_items,note_attributes',
     })
     result = []
     for o in data.get('orders', []):
@@ -1380,6 +1380,9 @@ def _fetch_nae_orders() -> list:
             ln = c.get('last_name') or ''
             fn = c.get('first_name') or ''
             title = item.get('title', '')
+            note_attrs = {a['name']: a['value'] for a in o.get('note_attributes', [])}
+            delivery_date = note_attrs.get('到着希望日', '')
+            delivery_time = note_attrs.get('配送時間帯', '')
             result.append({
                 'order_number': o['order_number'],
                 'customer': (ln + fn).strip() or '（名前なし）',
@@ -1387,6 +1390,8 @@ def _fetch_nae_orders() -> list:
                 'item_title': title,
                 'box_size': _nae_box_size(title),
                 'properties': valid_props,
+                'delivery_date': delivery_date,
+                'delivery_time': delivery_time,
             })
             break
     return result
@@ -1602,10 +1607,19 @@ function toggleAll(btn){{
             f'padding:8px 14px;border-bottom:1px solid #ffe0b2;">📦 {o["box_size"]}</div>'
             if o.get('box_size') else ''
         )
+        delivery_badge = ''
+        if o.get('delivery_date'):
+            dt_parts = [o['delivery_date']]
+            if o.get('delivery_time') and o['delivery_time'] != '指定なし':
+                dt_parts.append(o['delivery_time'])
+            delivery_badge = (
+                f'<span style="background:#e65100;color:#fff;font-size:12px;font-weight:700;'
+                f'border-radius:4px;padding:2px 8px;margin-left:8px;">📅 {"　".join(dt_parts)}</span>'
+            )
         detail_html += f"""
         <div class="order-detail">
           <div class="order-detail-header">
-            #{o['order_number']} {o['customer']}
+            #{o['order_number']} {o['customer']}{delivery_badge}
             <span style="font-weight:400;font-size:12px;margin-left:8px;">{o['created_jst']} · {pot_total}ポット</span>
           </div>
           {box_html}
