@@ -1356,44 +1356,53 @@ def _parse_box_count(box_size: str) -> tuple:
 
 def _fetch_nae_orders() -> list:
     """苗セット注文を全件取得してリスト形式で返す"""
+    import re as _re
     from datetime import timezone, timedelta
     JST = timezone(timedelta(hours=9))
     data = _shopify_get('/orders.json', params={
         'status': 'any', 'limit': 250,
         'fields': 'id,order_number,created_at,customer,line_items,note_attributes',
     })
+    skip_kw = _re.compile(r'送料|手数料|配送|運賃')
     result = []
     for o in data.get('orders', []):
+        nae_title = ''
+        valid_props = []
+        other_items = []
         for item in o.get('line_items', []):
-            if '苗' not in item.get('title', ''):
-                continue
-            valid_props = [
-                p for p in item.get('properties', [])
-                if not p['name'].startswith('_sbb') and p['name'] != 'ギフトメッセージ'
-            ]
-            if not valid_props:
-                continue
-            c = o.get('customer') or {}
-            created = datetime.fromisoformat(
-                o['created_at'].replace('Z', '+00:00')
-            ).astimezone(JST)
-            ln = c.get('last_name') or ''
-            fn = c.get('first_name') or ''
             title = item.get('title', '')
-            note_attrs = {a['name']: a['value'] for a in o.get('note_attributes', [])}
-            delivery_date = note_attrs.get('到着希望日', '')
-            delivery_time = note_attrs.get('配送時間帯', '')
-            result.append({
-                'order_number': o['order_number'],
-                'customer': (ln + fn).strip() or '（名前なし）',
-                'created_jst': created.strftime('%-m/%-d %H:%M'),
-                'item_title': title,
-                'box_size': _nae_box_size(title),
-                'properties': valid_props,
-                'delivery_date': delivery_date,
-                'delivery_time': delivery_time,
-            })
-            break
+            if '苗' in title:
+                props = [
+                    p for p in item.get('properties', [])
+                    if not p['name'].startswith('_sbb') and p['name'] != 'ギフトメッセージ'
+                ]
+                if props and not valid_props:
+                    nae_title = title
+                    valid_props = props
+            elif not skip_kw.search(title):
+                other_items.append({'title': title, 'quantity': item.get('quantity', 1)})
+        if not valid_props:
+            continue
+        c = o.get('customer') or {}
+        created = datetime.fromisoformat(
+            o['created_at'].replace('Z', '+00:00')
+        ).astimezone(JST)
+        ln = c.get('last_name') or ''
+        fn = c.get('first_name') or ''
+        note_attrs = {a['name']: a['value'] for a in o.get('note_attributes', [])}
+        delivery_date = note_attrs.get('到着希望日', '')
+        delivery_time = note_attrs.get('配送時間帯', '')
+        result.append({
+            'order_number': o['order_number'],
+            'customer': (ln + fn).strip() or '（名前なし）',
+            'created_jst': created.strftime('%-m/%-d %H:%M'),
+            'item_title': nae_title,
+            'box_size': _nae_box_size(nae_title),
+            'properties': valid_props,
+            'delivery_date': delivery_date,
+            'delivery_time': delivery_time,
+            'other_items': other_items,
+        })
     return result
 
 
@@ -1558,6 +1567,12 @@ function toggleAll(btn){{
     sorted_totals = sorted(totals.items(), key=lambda x: x[0])
     grand_total = sum(v for _, v in sorted_totals)
 
+    other_totals: dict = defaultdict(int)
+    for o in chosen:
+        for it in o.get('other_items', []):
+            other_totals[it['title']] += it['quantity']
+    sorted_other = sorted(other_totals.items(), key=lambda x: x[0])
+
     # 段ボール集計
     order_count = len(chosen)
     box_summary: dict = defaultdict(int)
@@ -1591,6 +1606,10 @@ function toggleAll(btn){{
     rows_html += f'<tr class="total-row"><td>合計</td><td>{grand_total} ポット</td></tr>'
     if box_summary_rows:
         rows_html += box_summary_rows
+    if sorted_other:
+        rows_html += '<tr><td colspan="2" style="background:#f5f5f0;color:#555;font-size:12px;padding:6px 14px;">── その他商品 ──</td></tr>'
+        for name, count in sorted_other:
+            rows_html += f'<tr><td>{name}</td><td>{count} 個</td></tr>'
 
     detail_html = ''
     for o in chosen:
@@ -1616,6 +1635,14 @@ function toggleAll(btn){{
                 f'<span style="background:#e65100;color:#fff;font-size:12px;font-weight:700;'
                 f'border-radius:4px;padding:2px 8px;margin-left:8px;">📅 {"　".join(dt_parts)}</span>'
             )
+        other_rows = ''
+        if o.get('other_items'):
+            other_rows = (
+                '<tr><td colspan="2" style="background:#f5f5f0;color:#555;font-size:12px;'
+                'padding:6px 14px;">── その他商品 ──</td></tr>'
+            )
+            for it in sorted(o['other_items'], key=lambda x: x['title']):
+                other_rows += f"<tr><td>{it['title']}</td><td>{it['quantity']} 個</td></tr>"
         detail_html += f"""
         <div class="order-detail">
           <div class="order-detail-header">
@@ -1623,7 +1650,7 @@ function toggleAll(btn){{
             <span style="font-weight:400;font-size:12px;margin-left:8px;">{o['created_jst']} · {pot_total}ポット</span>
           </div>
           {box_html}
-          <table>{rows}</table>
+          <table>{rows}{other_rows}</table>
         </div>"""
 
     order_label = '・'.join(f'#{n}' for n in sorted(selected_nums))
