@@ -1595,7 +1595,7 @@ function toggleAll(btn){{
         )
         rows = ''.join(
             f"<tr><td>{p['name']}</td><td>{p['value']}</td></tr>"
-            for p in o['properties']
+            for p in sorted(o['properties'], key=lambda p: p['name'])
         )
         box_html = (
             f'<div style="background:#fff3e0;color:#e65100;font-size:13px;font-weight:700;'
