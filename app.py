@@ -1550,7 +1550,7 @@ function toggleAll(btn){{
             val = ''.join(c for c in str(p['value']) if c.isdigit())
             totals[p['name']] += int(val) if val else 1
 
-    sorted_totals = sorted(totals.items(), key=lambda x: -x[1])
+    sorted_totals = sorted(totals.items(), key=lambda x: x[0])
     grand_total = sum(v for _, v in sorted_totals)
 
     # 段ボール集計
