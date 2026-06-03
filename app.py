@@ -1570,9 +1570,11 @@ def nae():
 </form>
 <script>
 function toggleAll(btn){{
-  var boxes = document.querySelectorAll('input[name=orders]');
-  var allChecked = Array.from(boxes).every(b=>b.checked);
-  boxes.forEach(b=>b.checked=!allChecked);
+  var boxes = Array.from(document.querySelectorAll('input[name=orders]')).filter(function(b){{
+    return b.closest('li.order-item').style.display !== 'none';
+  }});
+  var allChecked = boxes.every(function(b){{ return b.checked; }});
+  boxes.forEach(function(b){{ b.checked = !allChecked; }});
   btn.textContent = allChecked ? '全選択' : '全解除';
 }}
 function toggleMano(btn){{
