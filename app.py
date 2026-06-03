@@ -1482,18 +1482,20 @@ NAE_CSS = """
   .box-summary-row td {
     background: #fff3e0; color: #e65100; font-weight: 700; font-size: 14px;
   }
-  @page {
-    margin: 10mm 10mm 18mm 10mm;
-    @bottom-center {
-      content: "— " counter(page) " —";
-      font-size: 8px;
-      color: #555;
-      font-family: -apple-system, 'Helvetica Neue', sans-serif;
-    }
-  }
+  .js-pn { display: none; }
+  @page { margin: 10mm 10mm 18mm 10mm; }
   @media print {
     body { background: #fff; }
     .no-print { display: none; }
+    .js-pn {
+      display: block; text-align: center;
+      font-size: 8pt; color: #666;
+      padding: 4mm 0 2mm; margin: 0;
+    }
+    .summary-section { position: relative; min-height: 269mm; }
+    .summary-section .js-pn {
+      position: absolute; bottom: 0; left: 0; right: 0;
+    }
     .details-section { page-break-before: always; }
     .order-detail { page-break-inside: avoid; box-shadow: none; border: 1px solid #ddd; }
     .result-card { box-shadow: none; border: 1px solid #ddd; }
@@ -1726,6 +1728,67 @@ function toggleMano(btn){{
 <div class="btn-row no-print">
   <a href="/nae" class="btn btn-secondary" style="text-align:center;text-decoration:none;line-height:normal;display:flex;align-items:center;justify-content:center;">← 戻る</a>
 </div>
+<script>
+(function(){{
+  // A4: 297mm - 10mm top - 18mm bottom = 269mm content height at 96dpi
+  var PAGE_H = Math.round(269 * 96 / 25.4);
+
+  function absTop(el) {{
+    return el.getBoundingClientRect().top + (window.pageYOffset || document.documentElement.scrollTop);
+  }}
+
+  function clean() {{
+    [].slice.call(document.querySelectorAll('.js-pn')).forEach(function(e) {{ e.remove(); }});
+  }}
+
+  function mkPN(n) {{
+    var p = document.createElement('p');
+    p.className = 'js-pn';
+    p.textContent = '— ' + n + ' —';
+    return p;
+  }}
+
+  function run() {{
+    clean();
+    var summary = document.querySelector('.summary-section');
+    var details = document.querySelector('.details-section');
+    if (!summary || !details) return;
+
+    // ページ1の番号: summary-section の末尾（CSS で絶対位置・ページ下部に表示）
+    summary.appendChild(mkPN(1));
+
+    // ページ2以降: 注文ブロックの位置からページ区切りを推定して番号を挿入
+    var section = details.querySelector('.section');
+    var orders = [].slice.call(details.querySelectorAll('.order-detail'));
+    if (!orders.length) {{ section.appendChild(mkPN(2)); return; }}
+
+    var pageNum = 2;
+    var pageTopY = absTop(details);
+
+    orders.forEach(function(order) {{
+      var bottom = absTop(order) + order.offsetHeight;
+      if (bottom - pageTopY > PAGE_H) {{
+        order.parentNode.insertBefore(mkPN(pageNum), order);
+        pageNum++;
+        pageTopY = absTop(order);
+      }}
+    }});
+
+    section.appendChild(mkPN(pageNum));
+  }}
+
+  window.addEventListener('beforeprint', run);
+  window.addEventListener('afterprint', clean);
+  if (window.matchMedia) {{
+    var mq = window.matchMedia('print');
+    if (mq.addEventListener) {{
+      mq.addEventListener('change', function(m) {{ m.matches ? run() : clean(); }});
+    }} else if (mq.addListener) {{
+      mq.addListener(function(m) {{ m.matches ? run() : clean(); }});
+    }}
+  }}
+}})();
+</script>
 </body></html>""")
 
 
