@@ -1481,6 +1481,37 @@ NAE_CSS = """
   .box-summary-row td {
     background: #fff3e0; color: #e65100; font-weight: 700; font-size: 14px;
   }
+  @page {
+    margin: 10mm 10mm 18mm 10mm;
+    @bottom-center {
+      content: "— " counter(page) " —";
+      font-size: 8px;
+      color: #555;
+      font-family: -apple-system, 'Helvetica Neue', sans-serif;
+    }
+  }
+  @media print {
+    body { background: #fff; }
+    .no-print { display: none; }
+    .details-section { page-break-before: always; }
+    .order-detail { page-break-inside: avoid; box-shadow: none; border: 1px solid #ddd; }
+    .result-card { box-shadow: none; border: 1px solid #ddd; }
+    .header { padding: 8px 12px; }
+    .header h1 { font-size: 10px; }
+    .header .sub { font-size: 7px; }
+    .section { padding: 8px 10px; }
+    .result-card th { font-size: 7px; padding: 5px 8px; }
+    .result-card td { font-size: 7px; padding: 5px 8px; }
+    .total-row td { font-size: 8px; }
+    .order-detail-header { font-size: 7px; padding: 5px 8px; }
+    .order-detail td { font-size: 7px; padding: 4px 8px; }
+    .box-summary-row td { font-size: 7px; }
+    .header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .result-card th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .total-row td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .box-summary-row td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .order-detail-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
 </style>
 """
 
@@ -1658,22 +1689,28 @@ function toggleAll(btn){{
 
     return render_template_string(f"""<!DOCTYPE html><html lang="ja"><head>
 <meta charset="UTF-8">{NAE_CSS}</head><body>
-<div class="header">
-  <div><h1>🌸 苗パッキング集計</h1>
-  <div class="sub">{order_label}</div>
-  <div class="sub" style="margin-top:4px;font-size:13px;font-weight:700;opacity:1;">📬 {shipment_label}</div></div>
-</div>
-<div class="section">
-  <div class="result-card">
-    <table>
-      <thead><tr><th>品種</th><th>合計</th></tr></thead>
-      <tbody>{rows_html}</tbody>
-    </table>
+<div class="summary-section">
+  <div class="header">
+    <div><h1>🌸 苗パッキング集計</h1>
+    <div class="sub">{order_label}</div>
+    <div class="sub" style="margin-top:4px;font-size:13px;font-weight:700;opacity:1;">📬 {shipment_label}</div></div>
   </div>
-  <p style="font-size:13px;color:#888;margin-bottom:12px;">── 注文別内訳 ──</p>
-  {detail_html}
+  <div class="section">
+    <div class="result-card">
+      <table>
+        <thead><tr><th>品種</th><th>合計</th></tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </div>
+  </div>
 </div>
-<div class="btn-row">
+<div class="details-section">
+  <div class="section">
+    <p style="font-size:12px;color:#888;margin-bottom:12px;text-align:center;">── 注文別内訳 ──</p>
+    {detail_html}
+  </div>
+</div>
+<div class="btn-row no-print">
   <a href="/nae" class="btn btn-secondary" style="text-align:center;text-decoration:none;line-height:normal;display:flex;align-items:center;justify-content:center;">← 戻る</a>
 </div>
 </body></html>""")
