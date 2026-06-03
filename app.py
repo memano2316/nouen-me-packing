@@ -1444,6 +1444,7 @@ NAE_CSS = """
   }
   .btn-primary { background: #2d5a27; color: #fff; }
   .btn-secondary { background: #e0e0da; color: #333; }
+  .btn-warning { background: #f5a623; color: #fff; }
   .result-card {
     background: #fff; border-radius: 10px; margin-bottom: 14px;
     box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden;
@@ -1535,7 +1536,7 @@ def nae():
                 val = ''.join(c for c in str(p['value']) if c.isdigit())
                 pot_total += int(val) if val else 1
             items_html += f"""
-            <li class="order-item">
+            <li class="order-item" data-customer="{o['customer']}">
               <label class="order-label">
                 <input type="checkbox" name="orders" value="{o['order_number']}">
                 <div class="order-info">
@@ -1561,6 +1562,7 @@ def nae():
 </div>
 <div class="btn-row">
   <button type="button" class="btn btn-secondary" onclick="toggleAll(this)">全選択</button>
+  <button type="button" class="btn btn-warning" onclick="toggleMano(this)">眞野文宏の注文を非表示</button>
   <button type="submit" class="btn btn-primary">集計する</button>
 </div>
 </form>
@@ -1570,6 +1572,17 @@ function toggleAll(btn){{
   var allChecked = Array.from(boxes).every(b=>b.checked);
   boxes.forEach(b=>b.checked=!allChecked);
   btn.textContent = allChecked ? '全選択' : '全解除';
+}}
+function toggleMano(btn){{
+  var items = document.querySelectorAll('li.order-item[data-customer="眞野文宏"]');
+  var hidden = btn.dataset.hidden === '1';
+  items.forEach(function(li){{
+    li.style.display = hidden ? '' : 'none';
+    var cb = li.querySelector('input[name=orders]');
+    if(cb) cb.checked = false;
+  }});
+  btn.dataset.hidden = hidden ? '0' : '1';
+  btn.textContent = hidden ? '眞野文宏の注文を非表示' : '眞野文宏の注文を表示';
 }}
 </script>
 </body></html>""")
