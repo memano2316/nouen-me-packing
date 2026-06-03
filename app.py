@@ -1601,7 +1601,7 @@ function toggleMano(btn){{
     except Exception as e:
         return f'<pre style="color:red;padding:20px;">Shopify接続エラー: {e}</pre>', 500
 
-    chosen = [o for o in orders if o['order_number'] in selected_nums]
+    chosen = sorted([o for o in orders if o['order_number'] in selected_nums], key=lambda o: o['order_number'])
 
     from collections import defaultdict, OrderedDict
     totals: dict = defaultdict(int)
