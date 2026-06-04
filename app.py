@@ -1361,7 +1361,7 @@ def _fetch_nae_orders() -> list:
     JST = timezone(timedelta(hours=9))
     data = _shopify_get('/orders.json', params={
         'status': 'any', 'limit': 250,
-        'fields': 'id,order_number,created_at,customer,line_items,note_attributes',
+        'fields': 'id,order_number,created_at,customer,line_items,note_attributes,fulfillment_status',
     })
     skip_kw = _re.compile(r'送料|手数料|配送|運賃')
     result = []
@@ -1402,6 +1402,7 @@ def _fetch_nae_orders() -> list:
             'delivery_date': delivery_date,
             'delivery_time': delivery_time,
             'other_items': other_items,
+            'fulfilled': o.get('fulfillment_status') == 'fulfilled',
         })
     return result
 
@@ -1528,7 +1529,7 @@ def nae():
                 val = ''.join(c for c in str(p['value']) if c.isdigit())
                 pot_total += int(val) if val else 1
             items_html += f"""
-            <li class="order-item" data-customer="{o['customer']}">
+            <li class="order-item" data-customer="{o['customer']}" data-fulfilled="{'true' if o['fulfilled'] else 'false'}">
               <label class="order-label">
                 <input type="checkbox" name="orders" value="{o['order_number']}">
                 <div class="order-info">
@@ -1555,6 +1556,7 @@ def nae():
 <div class="btn-row">
   <button type="button" class="btn btn-secondary" onclick="toggleAll(this)">全選択</button>
   <button type="button" class="btn btn-warning" onclick="toggleMano(this)">眞野文宏の注文を非表示</button>
+  <button type="button" class="btn btn-warning" onclick="toggleFulfilled(this)">発送完了の注文を非表示</button>
   <button type="submit" class="btn btn-primary">集計する</button>
 </div>
 </form>
@@ -1577,6 +1579,17 @@ function toggleMano(btn){{
   }});
   btn.dataset.hidden = hidden ? '0' : '1';
   btn.textContent = hidden ? '眞野文宏の注文を非表示' : '眞野文宏の注文を表示';
+}}
+function toggleFulfilled(btn){{
+  var items = document.querySelectorAll('li.order-item[data-fulfilled="true"]');
+  var hidden = btn.dataset.hidden === '1';
+  items.forEach(function(li){{
+    li.style.display = hidden ? '' : 'none';
+    var cb = li.querySelector('input[name=orders]');
+    if(cb) cb.checked = false;
+  }});
+  btn.dataset.hidden = hidden ? '0' : '1';
+  btn.textContent = hidden ? '発送完了の注文を非表示' : '発送完了の注文を表示';
 }}
 </script>
 </body></html>""")
