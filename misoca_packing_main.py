@@ -56,14 +56,14 @@ MASTER_DATA = [
     {'genre': 'チルドレン', 'name': 'ハーブミックス', 'g': '150', 'pack': 'SP'},
     {'genre': 'チルドレン', 'name': 'ハーブミックス', 'g': '200', 'pack': 'SP'},
     {'genre': 'チルドレン', 'name': 'ハーブミックス', 'g': '250', 'pack': 'SP'},
-    {'genre': 'その他', 'name': 'チルドレン（100g）', 'g': '100', 'pack': 'SP'},
+    {'genre': 'その他', 'name': 'チルドレン（100g）', 'g': '100', 'pack': 'SP', 'harvest': False},
     {'genre': 'チルドレン', 'name': 'マイクロ➕花ミックス(ミニ)', 'g': '', 'pack': 'SP'},
-    {'genre': 'その他', 'name': 'チルドレン', 'g': '', 'pack': 'SP'},
-    {'genre': 'その他', 'name': 'with me!', 'g': '50', 'pack': 'SP'},
-    {'genre': 'その他', 'name': 'with me!', 'g': '70', 'pack': 'SP'},
-    {'genre': 'その他', 'name': 'with me!', 'g': '100', 'pack': 'SP'},
-    {'genre': 'その他', 'name': 'with me!', 'g': '140', 'pack': 'SP'},
-    {'genre': 'その他', 'name': 'with me!', 'g': '250', 'pack': 'SP'},
+    {'genre': 'その他', 'name': 'チルドレン', 'g': '', 'pack': 'SP', 'harvest': False},
+    {'genre': 'その他', 'name': 'with me!', 'g': '50', 'pack': 'SP', 'harvest': False},
+    {'genre': 'その他', 'name': 'with me!', 'g': '70', 'pack': 'SP', 'harvest': False},
+    {'genre': 'その他', 'name': 'with me!', 'g': '100', 'pack': 'SP', 'harvest': False},
+    {'genre': 'その他', 'name': 'with me!', 'g': '140', 'pack': 'SP', 'harvest': False},
+    {'genre': 'その他', 'name': 'with me!', 'g': '250', 'pack': 'SP', 'harvest': False},
     {'genre': 'マイクロリーフ', 'name': 'レッドからし水菜', 'g': '7', 'pack': 'SP'},
     {'genre': 'マイクロリーフ', 'name': 'レッドからし水菜', 'g': '15', 'pack': '横SP'},
     {'genre': 'マイクロリーフ', 'name': 'ルッコラ', 'g': '7', 'pack': 'SP'},
@@ -116,8 +116,8 @@ MASTER_DATA = [
     {'genre': 'マイクロリーフ', 'name': 'レッドオゼイユM(ミニ)', 'g': '3', 'pack': 'ミニパック'},
     {'genre': 'マイクロリーフ', 'name': 'レッドオゼイユL', 'g': '10', 'pack': '横SP'},
     {'genre': 'マイクロリーフ', 'name': 'ハーブミックス', 'g': '7', 'pack': '横SP'},
-    {'genre': 'その他', 'name': 'テンドリルピー', 'g': '12', 'pack': '横SP'},
-    {'genre': 'その他', 'name': 'テンドリルピー', 'g': '20', 'pack': '横SP'},
+    {'genre': 'その他', 'name': 'テンドリルピー', 'g': '12', 'pack': '横SP', 'harvest': False},
+    {'genre': 'その他', 'name': 'テンドリルピー', 'g': '20', 'pack': '横SP', 'harvest': False},
     {'genre': 'マイクロリーフ', 'name': 'ペリーラ青', 'g': '10', 'pack': 'SP'},
     {'genre': 'マイクロリーフ', 'name': 'ペリーラ青(ミニ)', 'g': '3', 'pack': 'ミニパック'},
     {'genre': 'マイクロリーフ', 'name': 'ペリーラ赤', 'g': '10', 'pack': 'SP'},
@@ -175,7 +175,7 @@ MASTER_DATA = [
     {'genre': 'マイクロリーフ', 'name': 'かきどおし斑入り花付き', 'g': '10', 'pack': '横SP'},
     {'genre': 'マイクロリーフ', 'name': 'オイスターリーフ', 'g': '10', 'pack': 'SP'},
     {'genre': 'マイクロリーフ', 'name': 'コルシカミント', 'g': '5', 'pack': 'SP'},
-    {'genre': 'その他', 'name': '四つ葉のクローバー', 'g': '15', 'pack': 'SP'},
+    {'genre': 'その他', 'name': '四つ葉のクローバー', 'g': '15', 'pack': 'SP', 'harvest': False},
     {'genre': 'その他', 'name': 'ローズマリー', 'g': '20', 'pack': '横SP'},
     {'genre': 'その他', 'name': 'タイム', 'g': '20', 'pack': '横SP'},
     {'genre': 'その他', 'name': 'レモングラス', 'g': '20', 'pack': 'SP'},
@@ -189,10 +189,10 @@ MASTER_DATA = [
     {'genre': 'その他', 'name': 'ブロンズフェンネル', 'g': '20', 'pack': 'SP'},
     {'genre': 'その他', 'name': 'フレッシュハーブティーミックス', 'g': '100', 'pack': 'SP'},
     {'genre': 'その他', 'name': 'セルバチコ', 'g': '100', 'pack': 'SP'},
-    {'genre': 'その他', 'name': 'ナスタチウムリーフ s', 'g': '25', 'pack': 'SP'},
-    {'genre': 'その他', 'name': 'ナスタチウムリーフ M', 'g': '25', 'pack': 'SP'},
-    {'genre': 'その他', 'name': 'ナスタチウムリーフ M(ミニ)', 'g': '10', 'pack': 'ミニパック'},
-    {'genre': 'その他', 'name': 'ナスタチウムリーフ L', 'g': '10', 'pack': 'SP'},
+    {'genre': 'その他', 'name': 'ナスタチウムリーフ s', 'g': '25', 'pack': 'SP', 'harvest': False},
+    {'genre': 'その他', 'name': 'ナスタチウムリーフ M', 'g': '25', 'pack': 'SP', 'harvest': False},
+    {'genre': 'その他', 'name': 'ナスタチウムリーフ M(ミニ)', 'g': '10', 'pack': 'ミニパック', 'harvest': False},
+    {'genre': 'その他', 'name': 'ナスタチウムリーフ L', 'g': '10', 'pack': 'SP', 'harvest': False},
     {'genre': 'その他', 'name': 'サンフラワーペタル オレンジ', 'g': '10', 'pack': '横SP'},
     {'genre': 'その他', 'name': 'サンフラワーペタル レッド&イエロー', 'g': '10', 'pack': '横SP'},
     {'genre': 'その他', 'name': 'サンフラワーペタル ブラウン&イエロー', 'g': '10', 'pack': '横SP'},
@@ -1112,7 +1112,17 @@ def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales
     # 収穫数 = g値 × 合計パック数（sp+横SP+MP+ミニ+タケウチ+ロテュス）
     harvest_data = []
     for r in rows:
-        if r['genre'] not in ('エディブルフラワー', 'その他'):
+        # ジャンル不明の要確認行はすべて表示
+        if r.get('unknown', False) and r.get('genre') == '要確認':
+            pass
+        # harvest: False が明示されている商品は除外
+        elif r.get('harvest') is False:
+            continue
+        # エディブルフラワーとその他は表示
+        elif r['genre'] in ('エディブルフラワー', 'その他'):
+            pass
+        # それ以外（マイクロリーフ等）は除外
+        else:
             continue
         total_packs = (to_int(r['sp']) + to_int(r['yokoSP']) +
                        to_int(r['mp']) + to_int(r['mini']) +
