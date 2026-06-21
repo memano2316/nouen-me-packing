@@ -93,6 +93,20 @@ jobs:
           upsert_var('MISOCA_ACCESS_TOKEN',  new_access)
           upsert_var('MISOCA_REFRESH_TOKEN', new_refresh)
 
+          print('✅ Railway env var 更新完了')
+
+          # ── Step 4: Railway デプロイをトリガー（新トークンを運行プロセスに反映）──
+          # env var 更新だけでは実行中プロセスには反映されないため、明示的に再デプロイする
+          deploy_mutation = '''mutation {
+            serviceInstanceRedeploy(environmentId: "''' + ENV_ID + '''" serviceId: "''' + SERVICE_ID + '''")
+          }'''
+          r3 = requests.post(RAILWAY_API, json={'query': deploy_mutation}, headers=rh, timeout=30)
+          r3_data = r3.json()
+          if r3.status_code == 200 and 'errors' not in r3_data:
+              print('✅ Railway 再デプロイ完了')
+          else:
+              print(f'⚠️  Railway 再デプロイ失敗（env var は更新済み）: {r3_data}')
+
           print('🎉 トークン自動リフレッシュ完了 — Railway に新トークンを保存しました')
           PYEOF
 
