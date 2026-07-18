@@ -987,8 +987,11 @@ def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales
 
     # 集計行は数字がある品目のみ表示（・付き）
     for s in summaries:
+        total_disp = f'{s["total_g"]}g'
+        if s['label'] != 'チルドレン':
+            total_disp = f'<u color="red">{total_disp}</u>'
         line = (
-            f'・本日の{s["label"]}の出荷量は合計 <u color="red">{s["total_g"]}g</u> になります。'
+            f'・本日の{s["label"]}の出荷量は合計 {total_disp} になります。'
             f'（{s["breakdown"]}）'
         )
         story.append(Paragraph(line, item_style))

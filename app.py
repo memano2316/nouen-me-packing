@@ -9,6 +9,9 @@ iPhone Safari からアクセス → 日付を入力 → PDF をブラウザで�
   MISOCA_REFRESH_TOKEN  : Misoca リフレッシュトークン
 """
 
+import base64
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -968,8 +971,11 @@ def generate_pdf(target_date_str: str, rows: list, output, total_sales: int = 0,
 
     # 集計行は数字がある品目のみ表示（・付き）
     for s in summaries:
+        total_disp = f'{s["total_g"]}g'
+        if s['label'] != 'チルドレン':
+            total_disp = f'<u color="red">{total_disp}</u>'
         line = (
-            f'・本日の{s["label"]}の出荷量は合計 <u color="red">{s["total_g"]}g</u> になります。'
+            f'・本日の{s["label"]}の出荷量は合計 {total_disp} になります。'
             f'（{s["breakdown"]}）'
         )
         story.append(Paragraph(line, item_style))
@@ -1744,6 +1750,183 @@ function toggleFulfilled(btn){{
   <a href="/nae" class="btn btn-secondary" style="text-align:center;text-decoration:none;line-height:normal;display:flex;align-items:center;justify-content:center;">← 戻る</a>
 </div>
 </body></html>""")
+
+
+# ============================================================
+# バンドルセレクター品種在庫の自動減算（Webhook: orders/paid）
+# ============================================================
+# CMO/shopify/bundle_lines_registry.json と同じ内容を手動で複製している
+# （このRailwayアプリはme-farm本体と別リポジトリのため、実行時に読み込めない）。
+# 新ラインを追加したら、ここにも product_id と collection GID を追記すること。
+BUNDLE_LINES = {
+    8127737790573: {'line': 'summer', 'collection_gid': 'gid://shopify/Collection/315781578861'},
+    8090355171437: {'line': 'summer', 'collection_gid': 'gid://shopify/Collection/315781578861'},
+    8090905903213: {'line': 'summer', 'collection_gid': 'gid://shopify/Collection/315781578861'},
+    8090910687341: {'line': 'summer', 'collection_gid': 'gid://shopify/Collection/315781578861'},
+    8090911047789: {'line': 'summer', 'collection_gid': 'gid://shopify/Collection/315781578861'},
+    8155650228333: {'line': 'autumn', 'collection_gid': 'gid://shopify/Collection/319089410157'},
+    8155650261101: {'line': 'autumn', 'collection_gid': 'gid://shopify/Collection/319089410157'},
+    8155650326637: {'line': 'autumn', 'collection_gid': 'gid://shopify/Collection/319089410157'},
+    8155650359405: {'line': 'autumn', 'collection_gid': 'gid://shopify/Collection/319089410157'},
+    8155650424941: {'line': 'autumn', 'collection_gid': 'gid://shopify/Collection/319089410157'},
+    8049158684781: {'line': 'assort', 'collection_gid': 'gid://shopify/Collection/318238982253'},
+    8049158881389: {'line': 'seedme', 'collection_gid': 'gid://shopify/Collection/319094489197'},
+}
+
+# 農場拠点は南知多ハウス1箇所のみ（複数拠点になったら要変更）
+SHOPIFY_LOCATION_GID = 'gid://shopify/Location/80297820269'
+ORDER_TAG_INVENTORY_DONE = '在庫調整済み'
+VARIETY_CACHE_TTL_SEC = 3600
+
+_variety_cache: dict = {}
+_recent_order_ids: set = set()  # プロセス内の即時二重配信ガード（再起動で失われるが本命はタグ）
+
+
+def _shopify_put(path: str, json_body: dict) -> dict:
+    token = _get_shopify_token()
+    base = f'https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION_NAE}'
+    r = requests.put(base + path, headers={'X-Shopify-Access-Token': token}, json=json_body)
+    r.raise_for_status()
+    return r.json()
+
+
+def _shopify_graphql(query: str, variables: dict = None) -> dict:
+    token = _get_shopify_token()
+    url = f'https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION_NAE}/graphql.json'
+    r = requests.post(
+        url,
+        headers={'X-Shopify-Access-Token': token, 'Content-Type': 'application/json'},
+        json={'query': query, 'variables': variables or {}},
+    )
+    r.raise_for_status()
+    body = r.json()
+    if body.get('errors'):
+        raise RuntimeError(f'GraphQL error: {body["errors"]}')
+    return body['data']
+
+
+def _load_variety_map(collection_gid: str) -> dict:
+    """コレクション内の品種商品を {商品タイトル: {variant_gid, inventory_item_gid}} で返す"""
+    query = """
+    query($id: ID!, $cursor: String) {
+      collection(id: $id) {
+        products(first: 100, after: $cursor) {
+          edges {
+            node {
+              title
+              variants(first: 1) {
+                edges { node { id inventoryItem { id } } }
+              }
+            }
+          }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+    """
+    mapping = {}
+    cursor = None
+    while True:
+        data = _shopify_graphql(query, {'id': collection_gid, 'cursor': cursor})
+        products = data['collection']['products']
+        for edge in products['edges']:
+            node = edge['node']
+            variant_edges = node['variants']['edges']
+            if not variant_edges:
+                continue
+            v = variant_edges[0]['node']
+            mapping[node['title']] = {
+                'variant_gid': v['id'],
+                'inventory_item_gid': v['inventoryItem']['id'],
+            }
+        if not products['pageInfo']['hasNextPage']:
+            break
+        cursor = products['pageInfo']['endCursor']
+    return mapping
+
+
+def _get_variety_map(line: str, collection_gid: str) -> dict:
+    import time
+    cached = _variety_cache.get(line)
+    if cached and time.time() - cached['at'] < VARIETY_CACHE_TTL_SEC:
+        return cached['map']
+    mapping = _load_variety_map(collection_gid)
+    _variety_cache[line] = {'at': time.time(), 'map': mapping}
+    return mapping
+
+
+def _verify_shopify_webhook(raw_body: bytes, hmac_header: str) -> bool:
+    if not hmac_header:
+        return False
+    digest = hmac.new(SHOPIFY_CLIENT_SECRET_NAE.encode('utf-8'), raw_body, hashlib.sha256).digest()
+    computed = base64.b64encode(digest).decode('utf-8')
+    return hmac.compare_digest(computed, hmac_header)
+
+
+@app.route('/webhooks/orders-paid', methods=['POST'])
+def webhook_orders_paid():
+    """バンドルセレクターで選ばれた品種の在庫を、入金確定注文ごとに自動で減らす"""
+    raw = request.get_data()
+    if not _verify_shopify_webhook(raw, request.headers.get('X-Shopify-Hmac-Sha256', '')):
+        return ('unauthorized', 401)
+
+    order = json.loads(raw)
+    order_id = order.get('id')
+    if order_id in _recent_order_ids:
+        return ('duplicate delivery (in-process)', 200)
+
+    existing_tags = [t.strip() for t in (order.get('tags') or '').split(',') if t.strip()]
+    if ORDER_TAG_INVENTORY_DONE in existing_tags:
+        return ('already processed', 200)
+
+    changes_by_item: dict = {}
+    for li in order.get('line_items', []):
+        bundle = BUNDLE_LINES.get(li.get('product_id'))
+        if not bundle:
+            continue
+        variety_map = _get_variety_map(bundle['line'], bundle['collection_gid'])
+        line_qty = li.get('quantity', 1)
+        for prop in li.get('properties', []):
+            name = prop.get('name', '')
+            m = re.match(r'^(\d+)', prop.get('value', ''))
+            variety = variety_map.get(name)
+            if not m or not variety:
+                if m:
+                    print(f'[webhook_orders_paid] 品種名不一致でスキップ: order={order.get("order_number")} line={bundle["line"]} name={name!r}')
+                continue
+            item_gid = variety['inventory_item_gid']
+            changes_by_item[item_gid] = changes_by_item.get(item_gid, 0) - int(m.group(1)) * line_qty
+
+    if not changes_by_item:
+        return ('no bundle line items', 200)
+
+    mutation = """
+    mutation($input: InventoryAdjustQuantitiesInput!) {
+      inventoryAdjustQuantities(input: $input) {
+        userErrors { field message }
+      }
+    }
+    """
+    changes = [
+        {'inventoryItemId': item_gid, 'locationId': SHOPIFY_LOCATION_GID, 'delta': delta}
+        for item_gid, delta in changes_by_item.items()
+    ]
+    result = _shopify_graphql(mutation, {
+        'input': {'reason': 'correction', 'name': 'available', 'changes': changes},
+    })
+    errors = result['inventoryAdjustQuantities']['userErrors']
+    if errors:
+        print(f'[webhook_orders_paid] inventoryAdjustQuantities failed: order={order.get("order_number")} errors={errors}')
+        return (f'inventory adjust error: {errors}', 500)
+
+    _recent_order_ids.add(order_id)
+    new_tags = ', '.join(existing_tags + [ORDER_TAG_INVENTORY_DONE])
+    try:
+        _shopify_put(f'/orders/{order_id}.json', {'order': {'id': order_id, 'tags': new_tags}})
+    except Exception as e:
+        print(f'[webhook_orders_paid] タグ付け失敗（在庫調整自体は完了）: order={order.get("order_number")} error={e}')
+
+    return ('ok', 200)
 
 
 if __name__ == '__main__':
