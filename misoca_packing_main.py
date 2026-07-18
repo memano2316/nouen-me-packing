@@ -988,7 +988,7 @@ def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales
     # 集計行は数字がある品目のみ表示（・付き）
     for s in summaries:
         line = (
-            f'・本日の{s["label"]}の出荷量は合計 {s["total_g"]}g になります。'
+            f'・本日の{s["label"]}の出荷量は合計 <u color="red">{s["total_g"]}g</u> になります。'
             f'（{s["breakdown"]}）'
         )
         story.append(Paragraph(line, item_style))
@@ -1000,7 +1000,7 @@ def generate_pdf(target_date_str: str, rows: list, output_path: str, total_sales
         combined_total = herb_total + children_total
         combined_text = (
             f'・本日のチルドレンハーブミックスとチルドレンの出荷量の合計は '
-            f'{combined_total}gとなります。'
+            f'<u color="red">{combined_total}g</u>となります。'
             f'（チルドレン{children_total}g＋チルドレンハーブミックス{herb_total}g）'
         )
         story.append(Paragraph(combined_text, item_style))
